@@ -292,14 +292,15 @@ export default function PricingLandingPage() {
       title: '1 Month Pass',
       duration: '30 Days Access',
       priceUsd: '$1.49',
-      priceSub: 'billed monthly',
-      subtitle: 'Ultra-affordable monthly pass for casual short-form video fans.',
+      priceSub: 'one-time payment',
+      subtitle: 'Ultra-affordable 30-day pass for casual short-form video fans.',
       features: [
         'Full access to all 4 platforms',
         'Smart HTML5 completion detection',
         '2 Devices concurrent limit',
+        '72-Hour Offline Grace Period',
         'Custom skip delay (0s - 5s)',
-        'Standard email support'
+        'Instant license delivery via screen & email'
       ],
       popular: false,
       badge: '⚡ 1 Month'
@@ -307,15 +308,17 @@ export default function PricingLandingPage() {
     {
       id: 'yearly',
       title: '1 Year Pro',
-      duration: '1 Year (365 Days)',
+      duration: '365 Days Access',
       priceUsd: '$9.49',
-      priceSub: 'billed annually',
+      priceSub: 'one-time payment',
       subtitle: 'The most popular choice — enjoy unlimited reels all year long.',
       features: [
         'Full access to all 4 platforms',
         'Smart HTML5 completion detection',
         '3 Devices concurrent limit',
+        '72-Hour Offline Grace Period',
         'Custom skip delay & manual protection',
+        'Instant license delivery via screen & email',
         'Priority updates & premium support',
         'Save over 50% vs monthly'
       ],
@@ -330,10 +333,12 @@ export default function PricingLandingPage() {
       priceSub: 'one-time payment',
       subtitle: 'Pay once, enjoy hands-free auto-scrolling forever.',
       features: [
-        'Unlimited lifetime access',
+        'Unlimited lifetime access (Never expires)',
         'Up to 5 devices simultaneously',
+        '72-Hour Offline Grace Period',
         'All 4 platforms + future platform updates',
         'Smart manual scroll & anti-loop shields',
+        'Instant license delivery via screen & email',
         'VIP priority support forever',
         'Zero recurring subscription fees'
       ],
@@ -353,15 +358,23 @@ export default function PricingLandingPage() {
     },
     {
       q: 'How do I receive my license key after checkout?',
-      a: 'Your license key (format: ARS-XXXX-XXXX-XXXX) is generated and displayed immediately on your screen. Simply click "Copy Key", open your AutoReels Scroll Chrome extension popup, and click "Activate".'
+      a: 'Your license key (format: ARS-XXXX-XXXX-XXXX) is generated and displayed immediately on your screen as soon as Paddle confirms payment, and is also sent to your checkout email. Simply click "Copy License", open your AutoReels Chrome extension popup, and click "Activate".'
+    },
+    {
+      q: 'How does the 72-Hour Offline Grace work?',
+      a: 'Once your license key is validated with our server, AutoReels securely caches your entitlement so you can enjoy uninterrupted hands-free scrolling for up to 72 hours even when you have no internet access. When your connection resumes, the extension seamlessly re-validates in the background.'
     },
     {
       q: 'Can I use one license key across multiple computers?',
-      a: 'Yes! Depending on your chosen plan (2 devices for 1-Month, 3 for 1-Year Pro, and up to 5 for Lifetime VIP), you can activate multiple devices concurrently.'
+      a: 'Yes! Depending on your chosen plan (2 devices for 1-Month, 3 for 1-Year Pro, and up to 5 for Lifetime VIP), you can activate multiple computers concurrently. You can also deactivate an old device anytime directly inside the extension popup.'
+    },
+    {
+      q: 'What is your refund policy?',
+      a: 'We offer a 30-day refund policy. If AutoReels does not meet your expectations, simply reach out to support with your Paddle transaction ID within 30 days for a fast, hassle-free refund.'
     },
     {
       q: 'Is my payment and browsing data safe?',
-      a: '100% secure. AutoReels Scroll operates under Chrome Manifest V3 with strict privacy sandboxing. We never track, inspect, or log your personal browsing data, viewing history, or credentials.'
+      a: '100% secure. Payments are processed by Paddle, our global Merchant of Record with bank-grade 256-bit encryption. AutoReels operates under Chrome Manifest V3 with strict privacy sandboxing: we never track, inspect, or log your personal browsing data, viewing history, or credentials.'
     }
   ];
 
@@ -549,7 +562,7 @@ export default function PricingLandingPage() {
               <span style={{ color: 'var(--success)' }}>✔</span> 72-Hour Offline Grace
             </div>
             <div style={styles.trustItem}>
-              <span style={{ color: 'var(--success)' }}>✔</span> Instant Activation
+              <span style={{ color: 'var(--success)' }}>✔</span> Instant License Delivery
             </div>
           </div>
         </div>
@@ -785,9 +798,79 @@ export default function PricingLandingPage() {
           <div style={styles.sectionEyebrow}>CHOOSE YOUR ACCESS PASS</div>
           <h2 style={styles.sectionTitle}>Simple, Transparent Global Pricing</h2>
           <p style={styles.sectionSubtitle}>
-            No hidden fees. Instant digital delivery with 1-click activation. 100% money-back guarantee.
+            No hidden fees. One-time payment with instant digital license key delivery. Includes 30-day refund policy.
           </p>
         </div>
+
+        {/* User / Developer Notice Banner */}
+        {pricingNotice && (
+          <div style={styles.pricingNoticeBox}>
+            <div style={{ display: 'flex', alignItems: 'center', gap: '12px' }}>
+              <span style={{ fontSize: '20px' }}>⚠️</span>
+              <div>
+                <div style={{ fontWeight: 600, fontSize: '14px', color: '#f87171' }}>Checkout Notice</div>
+                <div style={{ fontSize: '13px', color: '#cbd5e1', marginTop: '2px' }}>{pricingNotice}</div>
+              </div>
+            </div>
+            <button
+              onClick={() => setPricingNotice('')}
+              style={styles.noticeCloseBtn}
+              title="Dismiss"
+            >
+              ✕
+            </button>
+          </div>
+        )}
+
+        {/* Developer Diagnostics Box (Displays detailed Paddle error fields when checkout fails) */}
+        {lastPaddleError && (
+          <div style={styles.diagnosticCard}>
+            <div style={styles.diagnosticHeader}>
+              <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
+                <span style={{ fontSize: '18px' }}>🔧</span>
+                <span style={{ fontWeight: 700, fontSize: '14px', color: '#f59e0b' }}>
+                  Paddle Checkout Diagnostics (Development)
+                </span>
+              </div>
+              <button
+                onClick={() => setLastPaddleError(null)}
+                style={styles.noticeCloseBtn}
+                title="Dismiss Diagnostics"
+              >
+                ✕
+              </button>
+            </div>
+
+            <div style={styles.diagnosticGrid}>
+              <div><strong>Event Name:</strong> <code>{lastPaddleError.name || 'checkout.error'}</code></div>
+              <div><strong>Event Type:</strong> <code>{lastPaddleError.type || 'error'}</code></div>
+              <div><strong>Error Code:</strong> <code style={{ color: '#ef4444', fontWeight: 'bold' }}>{lastPaddleError.code || 'UNKNOWN_CODE'}</code></div>
+              <div><strong>Detail:</strong> <span>{lastPaddleError.detail || 'No detail provided.'}</span></div>
+              {lastPaddleError.documentation_url && lastPaddleError.documentation_url !== 'N/A' && (
+                <div>
+                  <strong>Documentation:</strong>{' '}
+                  <a
+                    href={lastPaddleError.documentation_url}
+                    target="_blank"
+                    rel="noopener noreferrer"
+                    style={{ color: '#38bdf8', textDecoration: 'underline' }}
+                  >
+                    {lastPaddleError.documentation_url}
+                  </a>
+                </div>
+              )}
+              {lastPaddleError.request_id && lastPaddleError.request_id !== 'N/A' && (
+                <div><strong>Request ID:</strong> <code>{lastPaddleError.request_id}</code></div>
+              )}
+            </div>
+
+            {lastPaddleError.code === 'domain_not_allowed' && (
+              <div style={styles.diagnosticTip}>
+                💡 <strong>Action Required:</strong> In your Paddle Dashboard, go to <strong>Checkout → Website Approval / Domains</strong> and add your current hostname.
+              </div>
+            )}
+          </div>
+        )}
 
         <div style={styles.plansGrid}>
           {plans.map((p) => (
@@ -928,11 +1011,15 @@ export default function PricingLandingPage() {
             <div style={{ fontSize: '13px', color: 'var(--text-dim)', marginTop: '4px' }}>
               © 2026 AutoReels Scroll. High-performance social video automation for Chrome.
             </div>
+            <div style={{ fontSize: '11px', color: '#64748b', marginTop: '6px', maxWidth: '480px' }}>
+              🔒 Payments securely processed by Paddle, our Merchant of Record. 256-bit SSL encrypted. Includes 30-day money-back guarantee.
+            </div>
           </div>
           <div style={styles.footerLinks}>
             <a href="#features" style={styles.footerLink}>Features</a>
-            <a href="#guide" style={styles.footerLink}>Guide</a>
             <a href="#pricing" style={styles.footerLink}>Pricing</a>
+            <a href="#faq" style={styles.footerLink}>FAQ & Refunds</a>
+            <a href="/dashboard" style={styles.footerLink}>License Lookup</a>
             <a href="/admin" style={styles.footerLink}>Admin Login</a>
           </div>
         </div>
@@ -1752,5 +1839,59 @@ const styles = {
     fontSize: '13px',
     fontWeight: 600,
     cursor: 'pointer'
+  },
+  pricingNoticeBox: {
+    maxWidth: '1200px',
+    margin: '0 auto 28px',
+    padding: '16px 20px',
+    borderRadius: '12px',
+    backgroundColor: 'rgba(239, 68, 68, 0.1)',
+    border: '1px solid rgba(239, 68, 68, 0.35)',
+    display: 'flex',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+    gap: '16px'
+  },
+  noticeCloseBtn: {
+    background: 'none',
+    border: 'none',
+    color: 'rgba(255, 255, 255, 0.6)',
+    fontSize: '18px',
+    cursor: 'pointer',
+    padding: '4px 8px',
+    borderRadius: '4px'
+  },
+  diagnosticCard: {
+    maxWidth: '1200px',
+    margin: '0 auto 28px',
+    padding: '20px 24px',
+    borderRadius: '14px',
+    backgroundColor: '#0c1524',
+    border: '1px solid rgba(245, 158, 11, 0.4)',
+    boxShadow: '0 8px 32px rgba(0, 0, 0, 0.4)'
+  },
+  diagnosticHeader: {
+    display: 'flex',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+    paddingBottom: '12px',
+    borderBottom: '1px solid rgba(255, 255, 255, 0.08)',
+    marginBottom: '14px'
+  },
+  diagnosticGrid: {
+    display: 'grid',
+    gridTemplateColumns: 'repeat(auto-fit, minmax(280px, 1fr))',
+    gap: '12px',
+    fontSize: '13px',
+    color: '#cbd5e1'
+  },
+  diagnosticTip: {
+    marginTop: '14px',
+    padding: '10px 14px',
+    borderRadius: '8px',
+    backgroundColor: 'rgba(56, 189, 248, 0.1)',
+    border: '1px solid rgba(56, 189, 248, 0.25)',
+    fontSize: '12px',
+    color: '#38bdf8'
   }
 };

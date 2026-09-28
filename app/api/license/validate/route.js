@@ -1,7 +1,9 @@
 /**
- * AutoReels Scroll - License Revalidation Endpoint
- * Route: POST /api/license/verify
- * Validates active activation status, license standing, and updates last_seen timestamp.
+ * AutoReels Scroll - License Validation Endpoint
+ * Route: POST /api/license/validate
+ * 
+ * Periodically validates that a device's license is active, unexpired, and not revoked.
+ * Strictly adheres to Step 14 specification.
  */
 
 import { getDb } from '../../../../lib/supabase.js';
@@ -15,24 +17,34 @@ export async function OPTIONS(request) {
 
 export async function POST(request) {
   try {
-    // 1. Rate limiting (max 60 verifications per minute per client)
+    // 1. Rate limiting (max 60 checks per minute per client)
     const clientIp = getClientIdentifier(request);
-    const rate = checkRateLimit(`ver-${clientIp}`, 60, 60000);
+    const rate = checkRateLimit(`val-${clientIp}`, 60, 60000);
     if (!rate.allowed) {
       return jsonResponse(
-        { success: false, code: 'RATE_LIMITED', message: 'Too many requests.' },
+        {
+          valid: false,
+          premium: false,
+          reason: 'RATE_LIMITED',
+          message: 'Too many requests. Please wait a moment.'
+        },
         429,
         request
       );
     }
 
-    // 2. Parse payload
+    // 2. Parse payload (supports deviceId and installationId)
     let body;
     try {
       body = await request.json();
     } catch {
       return jsonResponse(
-        { success: false, code: 'INVALID_REQUEST', message: 'Malformed JSON payload.' },
+        {
+          valid: false,
+          premium: false,
+          reason: 'INVALID_REQUEST',
+          message: 'Malformed JSON payload.'
+        },
         400,
         request
       );
@@ -43,7 +55,12 @@ export async function POST(request) {
 
     if (!rawKey || !deviceId) {
       return jsonResponse(
-        { success: false, code: 'INVALID_REQUEST', message: 'licenseKey and deviceId are required.' },
+        {
+          valid: false,
+          premium: false,
+          reason: 'INVALID_REQUEST',
+          message: 'licenseKey and deviceId are required.'
+        },
         400,
         request
       );
@@ -61,7 +78,12 @@ export async function POST(request) {
 
     if (licErr || !license) {
       return jsonResponse(
-        { success: false, code: 'INVALID_LICENSE', message: 'License not found.' },
+        {
+          valid: false,
+          premium: false,
+          reason: 'INVALID_LICENSE',
+          message: 'This license key is invalid.'
+        },
         404,
         request
       );
@@ -70,7 +92,12 @@ export async function POST(request) {
     // 4. Check revocation
     if (license.status === 'revoked') {
       return jsonResponse(
-        { success: false, code: 'LICENSE_REVOKED', message: 'License has been revoked.' },
+        {
+          valid: false,
+          premium: false,
+          reason: 'REVOKED_LICENSE',
+          message: 'This license has been revoked.'
+        },
         403,
         request
       );
@@ -80,10 +107,17 @@ export async function POST(request) {
     const now = new Date();
     if (license.expires_at && new Date(license.expires_at) < now) {
       if (license.status !== 'expired') {
-        await db.from('licenses').update({ status: 'expired' }).eq('id', license.id);
+        try {
+          await db.from('licenses').update({ status: 'expired' }).eq('id', license.id);
+        } catch {}
       }
       return jsonResponse(
-        { success: false, code: 'LICENSE_EXPIRED', message: 'License has expired.' },
+        {
+          valid: false,
+          premium: false,
+          reason: 'EXPIRED_LICENSE',
+          message: 'This license has expired.'
+        },
         403,
         request
       );
@@ -91,41 +125,47 @@ export async function POST(request) {
 
     if (license.status !== 'active') {
       return jsonResponse(
-        { success: false, code: 'INVALID_LICENSE', message: 'License is not active.' },
-        403,
-        request
-      );
-    }
-
-    // 6. Verify installation is registered as an active activation
-    const { data: activations } = await db
-      .from('activations')
-      .select('*')
-      .eq('license_id', license.id);
-
-    const activeList = (activations || []).filter((a) => a.status === 'active');
-    const activation = activeList.find(
-      (a) => a.device_id === deviceId || a.installation_id === deviceId
-    );
-
-    if (!activation) {
-      return jsonResponse(
         {
-          success: false,
-          code: 'ACTIVATION_NOT_FOUND',
-          message: 'Device activation not found or was deactivated.'
+          valid: false,
+          premium: false,
+          reason: 'INVALID_LICENSE',
+          message: 'License is not active.'
         },
         403,
         request
       );
     }
 
-    // 7. Update last_seen_at & last_validated_at
+    // 6. Verify device is an active activation for this license
+    const { data: activations } = await db
+      .from('activations')
+      .select('*')
+      .eq('license_id', license.id);
+
+    const activeList = (activations || []).filter((a) => a.status === 'active');
+    const matchedActivation = activeList.find(
+      (a) => a.device_id === deviceId || a.installation_id === deviceId
+    );
+
+    if (!matchedActivation) {
+      return jsonResponse(
+        {
+          valid: false,
+          premium: false,
+          reason: 'DEVICE_NOT_ACTIVATED',
+          message: 'This device is not activated for this license.'
+        },
+        403,
+        request
+      );
+    }
+
+    // 7. Update timestamps
     try {
       await db
         .from('activations')
         .update({ last_seen_at: now.toISOString() })
-        .eq('id', activation.id);
+        .eq('id', matchedActivation.id);
 
       await db
         .from('licenses')
@@ -135,19 +175,26 @@ export async function POST(request) {
 
     return jsonResponse(
       {
-        success: true,
-        status: 'active',
+        valid: true,
         plan: license.plan,
         expiresAt: license.expires_at,
+        premium: true,
+        success: true,
+        status: 'active',
         serverTime: now.toISOString()
       },
       200,
       request
     );
   } catch (err) {
-    console.error('[Verify] Unexpected error:', err);
+    console.error('[Validate] Error:', err);
     return jsonResponse(
-      { success: false, code: 'SERVER_ERROR', message: 'Server verification error.' },
+      {
+        valid: false,
+        premium: false,
+        reason: 'SERVER_ERROR',
+        message: 'Unable to verify your license. Please check your internet connection.'
+      },
       500,
       request
     );

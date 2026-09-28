@@ -36,11 +36,12 @@ export async function POST(request) {
       );
     }
 
-    const { licenseKey: rawKey, installationId } = body || {};
+    const { licenseKey: rawKey, deviceId: rawDeviceId, installationId } = body || {};
+    const deviceId = (rawDeviceId || installationId || '').trim();
 
-    if (!rawKey || !installationId) {
+    if (!rawKey || !deviceId) {
       return jsonResponse(
-        { success: false, code: 'INVALID_REQUEST', message: 'licenseKey and installationId are required.' },
+        { success: false, code: 'INVALID_REQUEST', message: 'licenseKey and deviceId are required.' },
         400,
         request
       );
@@ -52,7 +53,7 @@ export async function POST(request) {
     // 1. Find license
     const { data: license } = await db
       .from('licenses')
-      .select('id')
+      .select('id, activation_count')
       .eq('license_key', licenseKey)
       .single();
 
@@ -69,7 +70,12 @@ export async function POST(request) {
       .from('activations')
       .delete()
       .eq('license_id', license.id)
-      .eq('installation_id', installationId);
+      .eq('installation_id', deviceId);
+
+    try {
+      const remainingCount = Math.max(0, (license.activation_count || 1) - 1);
+      await db.from('licenses').update({ activation_count: remainingCount }).eq('id', license.id);
+    } catch {}
 
     if (delErr) {
       console.error('[Deactivate] Delete error:', delErr);

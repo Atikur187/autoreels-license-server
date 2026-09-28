@@ -51,45 +51,56 @@ export async function GET(request) {
       const purchase = purchases[0];
 
       // Retrieve associated license
+      let lic = null;
       if (purchase.license_id) {
         const { data: licenses } = await db
           .from('licenses')
           .select('*')
           .eq('id', purchase.license_id);
+        if (licenses && licenses.length > 0) lic = licenses[0];
+      }
+      if (!lic && purchase.paddle_transaction_id) {
+        const { data: licenses } = await db
+          .from('licenses')
+          .select('*')
+          .eq('paddle_transaction_id', purchase.paddle_transaction_id);
+        if (licenses && licenses.length > 0) lic = licenses[0];
+      }
 
-        if (licenses && licenses.length > 0) {
-          const lic = licenses[0];
-          const isExpired = lic.expires_at && new Date(lic.expires_at) < new Date();
+      if (lic) {
+        const isExpired = lic.expires_at && new Date(lic.expires_at) < new Date();
 
-          // Query active activations
-          const { data: acts } = await db.from('activations').select('*').eq('license_id', lic.id);
-          const activeActs = (acts || []).filter((a) => a.status === 'active');
+        // Query active activations
+        const { data: acts } = await db.from('activations').select('*').eq('license_id', lic.id);
+        const activeActs = (acts || []).filter((a) => a.status === 'active');
 
-          return jsonResponse(
-            {
-              success: true,
-              ready: true,
-              license: {
-                license_key: lic.license_key,
-                plan: lic.plan,
-                status: lic.status === 'revoked' ? 'revoked' : (isExpired ? 'expired' : lic.status),
-                expires_at: lic.expires_at,
-                max_devices: lic.max_devices,
-                activations_count: activeActs.length
-              },
-              purchase: {
-                transaction_id: purchase.paddle_transaction_id,
-                amount: purchase.amount,
-                currency: purchase.currency,
-                status: purchase.status,
-                purchased_at: purchase.purchased_at || purchase.created_at,
-                paddle_subscription_id: purchase.paddle_subscription_id || null
-              }
+        return jsonResponse(
+          {
+            success: true,
+            ready: true,
+            status: purchase.status,
+            license_key: lic.license_key,
+            plan: lic.plan,
+            license: {
+              license_key: lic.license_key,
+              plan: lic.plan,
+              status: lic.status === 'revoked' ? 'revoked' : (isExpired ? 'expired' : lic.status),
+              expires_at: lic.expires_at,
+              max_devices: lic.max_devices,
+              activations_count: activeActs.length
             },
-            200,
-            request
-          );
-        }
+            purchase: {
+              transaction_id: purchase.paddle_transaction_id,
+              amount: purchase.amount,
+              currency: purchase.currency,
+              status: purchase.status,
+              purchased_at: purchase.purchased_at || purchase.created_at,
+              paddle_subscription_id: purchase.paddle_subscription_id || null
+            }
+          },
+          200,
+          request
+        );
       }
 
       return jsonResponse(

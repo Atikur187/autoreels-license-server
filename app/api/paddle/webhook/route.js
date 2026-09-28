@@ -4,10 +4,12 @@
  * 
  * Cryptographically verifies Paddle webhook signatures and acts as the
  * authoritative source of truth for payment confirmations, renewals, and refunds.
+ * Implements strict event-level idempotency via webhook_events.
  */
 
 import { getDb } from '../../../../lib/supabase.js';
 import { generateLicenseKey } from '../../../../lib/license-generator.js';
+import { sendLicenseEmail } from '../../../../lib/email.js';
 import {
   verifyPaddleWebhook,
   resolvePlanFromEvent,
@@ -29,7 +31,7 @@ export async function POST(request) {
     // 2. Cryptographic signature check (ts + h1 HMAC-SHA256 with 10-min tolerance)
     const verification = verifyPaddleWebhook(rawBody, signatureHeader);
     if (!verification.valid) {
-      console.warn('[Paddle Webhook] Signature verification failed:', verification.error);
+      console.warn('[PADDLE] signature verification failed:', verification.error);
       return jsonResponse({ success: false, error: 'Unauthorized: ' + verification.error }, 401, request);
     }
 
@@ -42,9 +44,49 @@ export async function POST(request) {
     }
 
     const { event_type: eventType, event_id: eventId, data } = eventPayload || {};
-    console.log(`[Paddle Webhook] Verified event: ${eventType} (ID: ${eventId || 'unknown'})`);
+    console.log(`[PADDLE] event received: ${eventType} (ID: ${eventId || 'unknown'})`);
+    console.log(`[PADDLE] event verified successfully`);
 
     const db = getDb();
+
+    // 4. Strict Webhook Idempotency Check (Step 8)
+    // If this exact event_id was already processed, return HTTP 200 immediately
+    if (eventId) {
+      try {
+        const { data: existingEvent } = await db
+          .from('webhook_events')
+          .select('*')
+          .eq('event_id', eventId)
+          .single();
+
+        if (existingEvent && existingEvent.status === 'completed') {
+          console.log(`[PADDLE] idempotency check: Event ${eventId} already processed. Returning HTTP 200.`);
+          return jsonResponse(
+            {
+              success: true,
+              message: 'Event already processed (idempotent).',
+              eventId
+            },
+            200,
+            request
+          );
+        }
+
+        // Record event in processing state if not already logged
+        if (!existingEvent) {
+          await db.from('webhook_events').insert({
+            event_id: eventId,
+            event_type: eventType,
+            status: 'processing',
+            payload: eventPayload,
+            processed_at: new Date().toISOString()
+          });
+        }
+      } catch (evtErr) {
+        // Fallback: If webhook_events table not created in database yet, proceed safely
+        console.warn('[PADDLE] webhook_events table check warning (proceeding):', evtErr.message);
+      }
+    }
 
     // -------------------------------------------------------------------------
     // EVENT: transaction.completed / transaction.paid
@@ -56,14 +98,24 @@ export async function POST(request) {
         return jsonResponse({ success: false, error: 'Missing transaction ID in event.' }, 400, request);
       }
 
-      // Check idempotency: If this transaction has already been processed, prevent duplicates
+      console.log(`[PADDLE] ${eventType} received for transaction: ${transactionId}`);
+
+      // Transaction-level idempotency fallback check: If purchase record already exists
       const { data: existingPurchases } = await db
         .from('purchases')
         .select('*')
         .eq('paddle_transaction_id', transactionId);
 
       if (existingPurchases && existingPurchases.length > 0) {
-        console.log(`[Paddle Webhook] Idempotency notice: Transaction ${transactionId} already processed.`);
+        console.log(`[PADDLE] Idempotency notice: Transaction ${transactionId} already exists.`);
+        
+        // Mark webhook event completed
+        if (eventId) {
+          try {
+            await db.from('webhook_events').update({ status: 'completed' }).eq('event_id', eventId);
+          } catch {}
+        }
+
         return jsonResponse(
           {
             success: true,
@@ -76,11 +128,12 @@ export async function POST(request) {
       }
 
       // Extract transaction metadata
-      const customerEmail =
+      const customerEmail = (
         data?.customer?.email ||
         data?.customer_details?.email ||
         data?.custom_data?.email ||
-        'customer@autoreels.local';
+        'customer@autoreels.local'
+      ).trim().toLowerCase();
 
       // Find price ID from transaction line items
       const firstItem = data?.items && data.items[0];
@@ -95,7 +148,7 @@ export async function POST(request) {
       const resolvedPlan = resolvePlanFromEvent(priceId, customData, dbProducts || []);
 
       if (!resolvedPlan) {
-        console.error(`[Paddle Webhook] Unmapped Paddle Price ID: "${priceId}". Refusing to grant unverified plan.`);
+        console.error(`[PADDLE] Unmapped Paddle Price ID: "${priceId}". Refusing to grant unverified plan.`);
         return jsonResponse(
           {
             success: false,
@@ -137,32 +190,56 @@ export async function POST(request) {
 
       const newLicense = {
         license_key: licenseKey,
+        email: customerEmail,
         product_id: productId,
         plan: resolvedPlan,
         status: 'active',
         expires_at: expiresAt,
         max_devices: maxDevices,
+        device_limit: maxDevices,
+        activation_count: 0,
+        paddle_transaction_id: transactionId,
+        paddle_customer_id: paddleCustomerId,
+        paddle_subscription_id: subscriptionId,
         notes: `Paddle checkout (${customerEmail}) TrxID: ${transactionId}${subscriptionId ? ` SubID: ${subscriptionId}` : ''}`
       };
 
-      const { data: insertedLicense, error: licErr } = await db
+      let { data: insertedLicense, error: licErr } = await db
         .from('licenses')
         .insert(newLicense)
         .select();
 
+      if (licErr && licErr.code === 'PGRST204') {
+        // Schema cache does not yet have 003 migration columns; fallback to base columns
+        console.warn('[LICENSE] Retrying insert with base schema fields (pre-migration compatibility):', licErr.message);
+        const baseLicense = {
+          license_key: licenseKey,
+          product_id: productId,
+          plan: resolvedPlan,
+          status: 'active',
+          expires_at: expiresAt,
+          max_devices: maxDevices,
+          notes: `Paddle checkout (${customerEmail}) TrxID: ${transactionId}${subscriptionId ? ` SubID: ${subscriptionId}` : ''}`
+        };
+        const fallbackRes = await db.from('licenses').insert(baseLicense).select();
+        insertedLicense = fallbackRes.data;
+        licErr = fallbackRes.error;
+      }
+
       if (licErr) {
-        console.error('[Paddle Webhook] Database error inserting license:', licErr);
+        console.error('[LICENSE] Database error inserting license:', licErr);
         return jsonResponse({ success: false, error: 'Database insert failed.' }, 500, request);
       }
 
       const createdLicense = insertedLicense && insertedLicense[0] ? insertedLicense[0] : newLicense;
+      console.log(`[LICENSE] license created: ${licenseKey} for ${customerEmail} (Plan: ${resolvedPlan}, TrxID: ${transactionId})`);
 
       // 2. Record purchase in purchases table
       const newPurchase = {
         paddle_transaction_id: transactionId,
         paddle_customer_id: paddleCustomerId,
         paddle_subscription_id: subscriptionId,
-        customer_email: customerEmail.toLowerCase(),
+        customer_email: customerEmail,
         product_id: productId,
         plan: resolvedPlan,
         amount: parseFloat(totalAmount) || planConfig.priceUsd,
@@ -179,7 +256,43 @@ export async function POST(request) {
 
       await db.from('purchases').insert(newPurchase);
 
-      console.log(`[Paddle Webhook] Issued license ${licenseKey} for ${customerEmail} (Plan: ${resolvedPlan}, TrxID: ${transactionId})`);
+      // 3. Record order in orders table (Step 2)
+      try {
+        const newOrder = {
+          email: customerEmail,
+          plan: resolvedPlan,
+          amount: parseFloat(totalAmount) || planConfig.priceUsd,
+          currency,
+          paddle_transaction_id: transactionId,
+          paddle_customer_id: paddleCustomerId,
+          paddle_subscription_id: subscriptionId,
+          status: 'completed',
+          license_id: createdLicense.id || null
+        };
+        await db.from('orders').insert(newOrder);
+      } catch (orderErr) {
+        // Graceful if orders table not yet created
+        console.warn('[PADDLE] Note: orders table insert skipped (non-critical):', orderErr.message);
+      }
+
+      // 4. Mark webhook event as completed
+      if (eventId) {
+        try {
+          await db.from('webhook_events').update({ status: 'completed' }).eq('event_id', eventId);
+        } catch {}
+      }
+
+      // 5. Send confirmation email asynchronously (Step 11)
+      sendLicenseEmail({
+        to: customerEmail,
+        licenseKey,
+        planName: planConfig.title,
+        expiresAt,
+        deviceLimit: maxDevices,
+        transactionId
+      }).catch((emailErr) => {
+        console.error('[EMAIL] Async delivery failed:', emailErr.message);
+      });
 
       return jsonResponse(
         {
@@ -221,6 +334,13 @@ export async function POST(request) {
             .update({ status: 'refunded' })
             .eq('id', purchase.id);
 
+          try {
+            await db
+              .from('orders')
+              .update({ status: 'refunded' })
+              .eq('paddle_transaction_id', transactionId);
+          } catch {}
+
           // 2. Revoke associated license
           if (purchase.license_id) {
             await db
@@ -231,9 +351,15 @@ export async function POST(request) {
               })
               .eq('id', purchase.license_id);
 
-            console.log(`[Paddle Webhook] License ID ${purchase.license_id} revoked due to refund for transaction ${transactionId}.`);
+            console.log(`[PADDLE] License ID ${purchase.license_id} revoked due to refund for transaction ${transactionId}.`);
           }
         }
+      }
+
+      if (eventId) {
+        try {
+          await db.from('webhook_events').update({ status: 'completed' }).eq('event_id', eventId);
+        } catch {}
       }
 
       return jsonResponse({ success: true, message: 'Refund processed successfully.' }, 200, request);
@@ -255,6 +381,9 @@ export async function POST(request) {
         if (purchases && purchases.length > 0) {
           for (const p of purchases) {
             await db.from('purchases').update({ status: 'canceled' }).eq('id', p.id);
+            try {
+              await db.from('orders').update({ status: 'canceled' }).eq('paddle_subscription_id', subscriptionId);
+            } catch {}
 
             // If subscription is canceled immediately, expire the license
             if (data?.effective_from === 'immediately' && p.license_id) {
@@ -265,6 +394,12 @@ export async function POST(request) {
             }
           }
         }
+      }
+
+      if (eventId) {
+        try {
+          await db.from('webhook_events').update({ status: 'completed' }).eq('event_id', eventId);
+        } catch {}
       }
 
       return jsonResponse({ success: true, message: 'Subscription cancellation recorded.' }, 200, request);
@@ -297,9 +432,15 @@ export async function POST(request) {
               })
               .eq('id', purchase.license_id);
 
-            console.log(`[Paddle Webhook] Subscription ${subscriptionId} renewed. License updated with new expiry.`);
+            console.log(`[PADDLE] Subscription ${subscriptionId} renewed. License updated with new expiry.`);
           }
         }
+      }
+
+      if (eventId) {
+        try {
+          await db.from('webhook_events').update({ status: 'completed' }).eq('event_id', eventId);
+        } catch {}
       }
 
       return jsonResponse({ success: true, message: 'Subscription update handled.' }, 200, request);
@@ -316,18 +457,34 @@ export async function POST(request) {
           .from('purchases')
           .update({ status: 'past_due' })
           .eq('paddle_subscription_id', subscriptionId);
+        try {
+          await db.from('orders').update({ status: 'past_due' }).eq('paddle_subscription_id', subscriptionId);
+        } catch {}
       }
+
+      if (eventId) {
+        try {
+          await db.from('webhook_events').update({ status: 'completed' }).eq('event_id', eventId);
+        } catch {}
+      }
+
       return jsonResponse({ success: true, message: 'Past due status recorded.' }, 200, request);
     }
 
-    // Unhandled event type acknowledged safely
+    // Mark other acknowledged events
+    if (eventId) {
+      try {
+        await db.from('webhook_events').update({ status: 'completed' }).eq('event_id', eventId);
+      } catch {}
+    }
+
     return jsonResponse(
       { success: true, message: `Event ${eventType} acknowledged.` },
       200,
       request
     );
   } catch (err) {
-    console.error('[Paddle Webhook] Fatal error:', err);
+    console.error('[PADDLE] Fatal webhook error:', err);
     return jsonResponse({ success: false, error: err.message || 'Internal server error.' }, 500, request);
   }
 }
