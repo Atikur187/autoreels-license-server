@@ -1,13 +1,14 @@
 /**
- * AutoReels Scroll - Paddle Customer Portal API
+ * AutoReels Scroll — Paddle Customer Portal API
  * Route: POST /api/paddle/customer-portal
  * 
- * Generates an authenticated Paddle customer portal session link for customers
- * to manage their payment methods and subscriptions securely.
+ * Verifies authentication server-side, queries subscriptions, and mints
+ * an authenticated Paddle customer portal session link via @paddle/paddle-node-sdk.
  */
 
-import { getDb } from '../../../../lib/supabase.js';
-import { PADDLE_API_KEY, PADDLE_ENVIRONMENT } from '../../../../lib/paddle.js';
+import { resolveAuthenticatedUser } from '../../../../lib/auth.js';
+import { getCustomerSubscriptions } from '../../../../lib/db-service.js';
+import { getPaddleNodeClient } from '../../../../lib/paddle-node.js';
 import { handleOptions, jsonResponse } from '../../../../lib/cors.js';
 
 export async function OPTIONS(request) {
@@ -16,81 +17,73 @@ export async function OPTIONS(request) {
 
 export async function POST(request) {
   try {
-    const body = await request.json().catch(() => ({}));
-    const { customerId: rawCustomerId, email } = body;
+    // 1. Authenticate user server-side FIRST
+    // Never trust client-supplied customer ID
+    const auth = await resolveAuthenticatedUser(request);
 
-    const db = getDb();
-    let customerId = rawCustomerId;
-
-    // Look up customer ID by email if not directly provided
-    if (!customerId && email) {
-      const { data: purchases } = await db
-        .from('purchases')
-        .select('*')
-        .eq('customer_email', email.trim().toLowerCase())
-        .order('created_at', { ascending: false });
-
-      if (purchases && purchases.length > 0 && purchases[0].paddle_customer_id) {
-        customerId = purchases[0].paddle_customer_id;
-      }
-    }
-
-    if (!customerId) {
+    if (!auth.authenticated || !auth.email) {
       return jsonResponse(
         {
           success: false,
-          error: 'No active Paddle customer record found for this identifier.'
+          error: 'Unauthorized: Authentication required to access billing portal.'
+        },
+        401,
+        request
+      );
+    }
+
+    if (!auth.customerId) {
+      return jsonResponse(
+        {
+          success: false,
+          error: 'No active Paddle billing customer found for your account.'
         },
         404,
         request
       );
     }
 
-    // Call official Paddle Billing API to create customer portal session
-    if (PADDLE_API_KEY && !PADDLE_API_KEY.includes('sample')) {
-      const apiHost =
-        PADDLE_ENVIRONMENT === 'sandbox'
-          ? 'https://sandbox-api.paddle.com'
-          : 'https://api.paddle.com';
+    const customerId = auth.customerId;
+    const subscriptions = await getCustomerSubscriptions(customerId);
+    const subscriptionIds = subscriptions
+      .map((s) => s.subscription_id || s.id)
+      .filter(Boolean);
 
-      try {
-        const paddleRes = await fetch(`${apiHost}/customers/${encodeURIComponent(customerId)}/portal-sessions`, {
-          method: 'POST',
-          headers: {
-            Authorization: `Bearer ${PADDLE_API_KEY}`,
-            'Content-Type': 'application/json'
-          },
-          body: JSON.stringify({})
-        });
+    // 2. Mint session with Paddle Node SDK
+    const paddle = getPaddleNodeClient();
+    const session = await paddle.customerPortalSessions.create(
+      customerId,
+      subscriptionIds.length > 0 ? subscriptionIds : undefined
+    );
 
-        const paddleData = await paddleRes.json();
-        if (paddleRes.ok && paddleData?.data?.urls?.general?.overview) {
-          return jsonResponse(
-            {
-              success: true,
-              portalUrl: paddleData.data.urls.general.overview
-            },
-            200,
-            request
-          );
-        }
-      } catch (apiErr) {
-        console.warn('[Paddle Portal] API session generation error:', apiErr.message);
-      }
+    const portalUrl =
+      session?.urls?.general?.overview ||
+      session?.urls?.general?.subscriptions ||
+      session?.urls?.general?.paymentMethods ||
+      null;
+
+    if (!portalUrl) {
+      throw new Error('Failed to retrieve portal URL from Paddle response.');
     }
 
-    // Fallback if API key not yet connected
     return jsonResponse(
       {
         success: true,
-        message: 'To manage your subscription or payment details, please check the management link in your receipt email.',
+        portalUrl,
         customerId
       },
       200,
       request
     );
   } catch (err) {
-    console.error('[Paddle Portal] Server error:', err);
-    return jsonResponse({ success: false, error: 'Internal server error.' }, 500, request);
+    console.error('[PADDLE CUSTOMER PORTAL] Error:', err);
+    return jsonResponse(
+      {
+        success: false,
+        error: err.message || 'Internal server error creating portal session.'
+      },
+      500,
+      request
+    );
   }
 }
