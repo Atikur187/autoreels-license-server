@@ -2,14 +2,14 @@
 
 import React, { useState, useEffect, useRef } from 'react';
 import { initializePaddle, Paddle } from '@paddle/paddle-js';
-import { Tier } from '@/lib/tiers';
+import { Tier, TIERS as DEFAULT_TIERS } from '../../lib/tiers';
 import './pricing.css';
 
 interface PricingTableProps {
   initialCountry: string | null;
   environment: 'sandbox' | 'production';
   clientToken: string;
-  tiers: Tier[];
+  tiers?: Tier[];
   customerEmail?: string | null;
   paddleCustomerId?: string | null;
 }
@@ -25,10 +25,11 @@ export default function PricingTable({
   initialCountry,
   environment,
   clientToken,
-  tiers,
+  tiers = DEFAULT_TIERS,
   customerEmail = null,
   paddleCustomerId = null
 }: PricingTableProps) {
+  const displayTiers = Array.isArray(tiers) && tiers.length > 0 ? tiers : DEFAULT_TIERS;
   // Billing cycle state: 'month' | 'year'
   const [billingCycle, setBillingCycle] = useState<'month' | 'year'>('month');
   const [paddle, setPaddle] = useState<Paddle | null>(null);
@@ -108,7 +109,7 @@ export default function PricingTable({
 
       try {
         // Collect current price IDs for all tiers based on active billing cycle
-        const items = tiers.map((tier) => ({
+        const items = displayTiers.map((tier) => ({
           priceId: tier.priceId[billingCycle],
           quantity: 1
         }));
@@ -304,7 +305,7 @@ export default function PricingTable({
 
         {/* 3-Tier Pricing Grid */}
         <div className="pricing-grid">
-          {tiers.map((tier) => {
+          {displayTiers.map((tier) => {
             const currentPriceId = tier.priceId[billingCycle];
             const priceInfo = prices[currentPriceId];
             const isOpeningThis = activeCheckoutTier === tier.name;

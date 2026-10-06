@@ -1,7 +1,8 @@
 import React from 'react';
+import nextDynamic from 'next/dynamic';
 import { headers, cookies } from 'next/headers';
-import PricingTable from './PricingTable';
-import { TIERS } from '@/lib/tiers';
+import { TIERS } from '../../lib/tiers';
+import './pricing.css';
 
 export const dynamic = 'force-dynamic';
 
@@ -9,6 +10,35 @@ export const metadata = {
   title: 'Pricing Plans & Licensing — AutoReels Scroll',
   description: 'Choose from Starter, Pro, and Advanced tiers for hands-free video scrolling. Localized pricing with Paddle Checkout.'
 };
+
+// Client-only dynamic component to completely prevent @paddle/paddle-js SSR crashes
+const PricingTable = nextDynamic(() => import('./PricingTable'), {
+  ssr: false,
+  loading: () => (
+    <div className="pricing-wrapper" style={{ minHeight: '100vh' }}>
+      <div className="pricing-glow-bg" />
+      <div className="pricing-container" style={{ textAlign: 'center', paddingTop: '4rem' }}>
+        <div className="pricing-badge-wrapper">
+          <span className="pricing-tag">Pricing Plans & Licensing</span>
+        </div>
+        <h1 className="pricing-title">Automate your reels hands-free</h1>
+        <p className="pricing-subtitle" style={{ margin: '1rem auto 3rem' }}>
+          Loading plans &amp; pricing...
+        </p>
+        <div style={{ display: 'flex', justifyContent: 'center', alignItems: 'center', minHeight: '200px' }}>
+          <div style={{
+            width: '40px',
+            height: '40px',
+            border: '3px solid rgba(56, 189, 248, 0.2)',
+            borderTopColor: '#38bdf8',
+            borderRadius: '50%',
+            animation: 'spin 0.8s linear infinite'
+          }} />
+        </div>
+      </div>
+    </div>
+  )
+});
 
 const DEFAULT_SANDBOX_CLIENT_TOKEN = 'test_22abe763cbc6f5b7f432db48a97';
 
