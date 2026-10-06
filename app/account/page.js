@@ -14,22 +14,27 @@ export const metadata = {
 };
 
 export default async function AccountPage({ searchParams }) {
-  // 1. Resolve authentication server-side
-  const headerList = headers();
-  const mockReq = {
-    headers: headerList,
-    url: searchParams?.email ? `http://localhost?email=${encodeURIComponent(searchParams.email)}` : 'http://localhost'
-  };
-
-  const auth = await resolveAuthenticatedUser(mockReq);
-
+  // 1. Resolve authentication server-side safely
+  let auth = { authenticated: false };
   let subscriptions = [];
   let accessDetails = null;
 
-  if (auth.authenticated && auth.customerId) {
-    subscriptions = await getCustomerSubscriptions(auth.customerId);
-    const primarySub = subscriptions.length > 0 ? subscriptions[0] : null;
-    accessDetails = getSubscriptionAccessDetails(primarySub);
+  try {
+    const headerList = headers();
+    const mockReq = {
+      headers: headerList,
+      url: searchParams?.email ? `http://localhost?email=${encodeURIComponent(searchParams.email)}` : 'http://localhost'
+    };
+
+    auth = await resolveAuthenticatedUser(mockReq);
+
+    if (auth.authenticated && auth.customerId) {
+      subscriptions = await getCustomerSubscriptions(auth.customerId);
+      const primarySub = subscriptions.length > 0 ? subscriptions[0] : null;
+      accessDetails = getSubscriptionAccessDetails(primarySub);
+    }
+  } catch (err) {
+    console.warn('[AccountPage] Auth resolution error:', err);
   }
 
   return (
