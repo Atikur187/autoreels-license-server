@@ -22,7 +22,7 @@ import { upsertCustomer, upsertSubscription } from '../../../../lib/db-service.j
 import { getDb } from '../../../../lib/supabase.js';
 import { generateLicenseKey } from '../../../../lib/license-generator.js';
 import { sendLicenseEmail } from '../../../../lib/email.js';
-import { resolvePlanFromEvent, calculateExpirationDate, PLANS } from '../../../../lib/paddle.js';
+import { resolvePlanFromEvent, calculateExpirationDate, PLANS, verifyPaddleWebhook } from '../../../../lib/paddle.js';
 import { handleOptions, jsonResponse } from '../../../../lib/cors.js';
 
 export async function OPTIONS(request) {
@@ -30,13 +30,13 @@ export async function OPTIONS(request) {
 }
 
 export async function POST(request) {
-  // 0. Dynamic IP Allowlist Check (authoritative CIDRs from https://api.paddle.com/ips)
+  // 0. Dynamic IP Check (Authoritative Paddle CIDR validation from https://api.paddle.com/ips)
   const paddleEnv = (process.env.PADDLE_ENV || 'sandbox').toLowerCase();
   const ipCheck = await validatePaddleWebhookIp(request, paddleEnv);
   if (!ipCheck.allowed) {
-    console.warn(`[PADDLE WEBHOOK] IP delivery rejected: ${ipCheck.clientIp} (${ipCheck.reason})`);
+    console.error(`[PADDLE WEBHOOK] Rejected: Client IP ${ipCheck.clientIp} (${ipCheck.reason}) not in Paddle IP allowlist.`);
     return jsonResponse(
-      { error: 'Forbidden: Request IP is not in Paddle authoritative allowlist.' },
+      { error: 'Forbidden: IP address not authorized to deliver Paddle webhooks.' },
       403,
       request
     );
@@ -67,8 +67,17 @@ export async function POST(request) {
     const paddle = getPaddleNodeClient();
     const webhookSecret = getPaddleWebhookSecret();
 
-    // In Node SDK: paddle.webhooks.unmarshal(rawBody, secret, signature)
-    event = await paddle.webhooks.unmarshal(rawBody, webhookSecret, signatureHeader);
+    try {
+      // In Node SDK: paddle.webhooks.unmarshal(rawBody, secret, signature)
+      event = await paddle.webhooks.unmarshal(rawBody, webhookSecret, signatureHeader);
+    } catch (unmarshalErr) {
+      // Cryptographic HMAC-SHA256 signature verification fallback for synthetic/custom event structures
+      const nativeVerify = verifyPaddleWebhook(rawBody, signatureHeader, webhookSecret);
+      if (!nativeVerify.valid) {
+        throw new Error(nativeVerify.error || unmarshalErr.message);
+      }
+      event = JSON.parse(rawBody);
+    }
   } catch (verifyErr) {
     console.error('[PADDLE WEBHOOK] Signature verification failed:', verifyErr.message);
     // CRITICAL: Return non-2xx (401) so Paddle knows delivery failed and retries
@@ -120,6 +129,8 @@ export async function POST(request) {
   }
 
   try {
+    let txResult = null;
+
     // 5. Route to typed event handlers
     switch (eventType) {
       // -----------------------------------------------------------------------
@@ -153,7 +164,16 @@ export async function POST(request) {
       // -----------------------------------------------------------------------
       case 'transaction.completed':
       case 'transaction.paid': {
-        await handleTransactionCompleted(data, eventId);
+        txResult = await handleTransactionCompleted(data, eventId);
+        break;
+      }
+
+      // -----------------------------------------------------------------------
+      // Adjustment / Refund Events
+      // -----------------------------------------------------------------------
+      case 'adjustment.created':
+      case 'adjustment.updated': {
+        await handleAdjustmentEvent(data);
         break;
       }
 
@@ -181,7 +201,8 @@ export async function POST(request) {
         success: true,
         eventType,
         eventId,
-        message: 'Event processed successfully.'
+        message: 'Event processed successfully.',
+        ...(txResult || {})
       },
       200,
       request
@@ -418,26 +439,26 @@ async function handleTransactionCompleted(data, eventId) {
     });
   }
 
-  // Resolve plan authoritatively
+  // Resolve plan authoritatively from Paddle Price ID
   const { data: dbProducts } = await db.from('products').select('*');
-  const resolvedPlan = resolvePlanFromEvent(priceId, data.customData || data.custom_data || {}, dbProducts || []) || 'starter';
-  const planConfig = PLANS[resolvedPlan] || PLANS['starter'];
+  const resolvedPlan =
+    resolvePlanFromEvent(priceId, data.customData || data.custom_data || {}, dbProducts || []) ||
+    (data.customData?.plan && PLANS[data.customData.plan] ? data.customData.plan : null) ||
+    (data.custom_data?.plan && PLANS[data.custom_data.plan] ? data.custom_data.plan : null) ||
+    '30day';
+  const planConfig = PLANS[resolvedPlan] || PLANS['30day'];
   const expiresAt = calculateExpirationDate(resolvedPlan);
-  const maxDevices = planConfig.maxDevices || 1;
+  const maxDevices = planConfig.maxDevices || (resolvedPlan === 'lifetime' ? 5 : (resolvedPlan === 'yearly' ? 3 : 2));
 
   // Generate unique license key
   const licenseKey = generateLicenseKey('ARS');
 
   const newLicense = {
     license_key: licenseKey,
-    email: customerEmail,
     plan: resolvedPlan,
     status: 'active',
     expires_at: expiresAt,
     max_devices: maxDevices,
-    paddle_transaction_id: transactionId,
-    paddle_customer_id: customerId,
-    paddle_subscription_id: subscriptionId,
     notes: `Paddle transaction (${customerEmail}) TrxID: ${transactionId}`
   };
 
@@ -490,4 +511,63 @@ async function handleTransactionCompleted(data, eventId) {
   });
 
   console.log(`[PADDLE WEBHOOK] Transaction completed & provisioned: ${transactionId} for ${customerEmail}`);
+  return {
+    plan: resolvedPlan,
+    licenseKey,
+    transactionId,
+    licenseId: createdLicense.id || null
+  };
 }
+
+/**
+ * Handles adjustment.created and adjustment.updated events (refunds/chargebacks).
+ * Revokes associated digital licenses and marks purchases as refunded.
+ */
+async function handleAdjustmentEvent(data) {
+  const transactionId = data.transactionId || data.transaction_id;
+  const status = (data.status || '').toLowerCase();
+  const action = (data.action || '').toLowerCase();
+
+  console.log(`[PADDLE WEBHOOK] Processing adjustment for transaction: ${transactionId} (action: ${action}, status: ${status})`);
+
+  if (!transactionId) {
+    console.warn('[PADDLE WEBHOOK] Adjustment event missing transactionId:', data);
+    return;
+  }
+
+  const db = getDb();
+  try {
+    // 1. Mark purchases as refunded
+    await db
+      .from('purchases')
+      .update({ status: 'refunded', updated_at: new Date().toISOString() })
+      .eq('paddle_transaction_id', transactionId);
+
+    // 2. Revoke associated licenses by looking up purchases
+    const { data: purchases } = await db
+      .from('purchases')
+      .select('*')
+      .eq('paddle_transaction_id', transactionId);
+
+    if (purchases && purchases.length > 0) {
+      for (const purchase of purchases) {
+        if (purchase.license_id) {
+          await db
+            .from('licenses')
+            .update({
+              status: 'revoked',
+              notes: `Refunded via Paddle adjustment (${data.id || 'adj'})`,
+              updated_at: new Date().toISOString()
+            })
+            .eq('id', purchase.license_id);
+          console.log(`[PADDLE WEBHOOK] License ${purchase.license_id} marked revoked.`);
+        }
+      }
+    }
+
+    console.log(`[PADDLE WEBHOOK] Completed refund/revocation for transaction ${transactionId}`);
+  } catch (err) {
+    console.error('[PADDLE WEBHOOK] Adjustment handling error:', err.message);
+  }
+}
+

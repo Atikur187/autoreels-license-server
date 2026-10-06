@@ -154,7 +154,15 @@ async function runTests() {
       id: testTxnLifetime,
       customer_id: 'ctm_test_lifetime_001',
       customer: { email: 'vip_buyer@example.com' },
-      items: [{ price: { id: PADDLE_PRICE_LIFETIME } }],
+      items: [
+        {
+          price: {
+            id: PADDLE_PRICE_LIFETIME,
+            product_id: 'pro_01m2b63xqaddjz2y2btxtsb0am',
+            unit_price: { amount: '1999', currency_code: 'USD' }
+          }
+        }
+      ],
       details: { totals: { total: 19.99, currency_code: 'USD' } },
       created_at: new Date().toISOString()
     }
@@ -246,7 +254,15 @@ async function runTests() {
     data: {
       id: testTxnMonthly,
       customer: { email: 'monthly_buyer@example.com' },
-      items: [{ price: { id: PADDLE_PRICE_MONTHLY } }],
+      items: [
+        {
+          price: {
+            id: PADDLE_PRICE_MONTHLY,
+            product_id: 'pro_01m2b63xqaddjz2y2btxtsb0am',
+            unit_price: { amount: '149', currency_code: 'USD' }
+          }
+        }
+      ],
       details: { totals: { total: 1.49, currency_code: 'USD' } },
       created_at: new Date().toISOString()
     }

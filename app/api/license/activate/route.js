@@ -142,7 +142,7 @@ export async function POST(request) {
     }
 
     const now = new Date();
-    if (license.expires_at && new Date(license.expires_at) < now) {
+    if (license.status === 'expired' || (license.expires_at && new Date(license.expires_at) < now)) {
       if (license.status !== 'expired') {
         try {
           await db.from('licenses').update({ status: 'expired' }).eq('id', license.id);

@@ -78,12 +78,14 @@ export async function POST(request) {
 
     // 5. Check expiration
     const now = new Date();
-    if (license.expires_at && new Date(license.expires_at) < now) {
+    if (license.status === 'expired' || (license.expires_at && new Date(license.expires_at) < now)) {
       if (license.status !== 'expired') {
-        await db.from('licenses').update({ status: 'expired' }).eq('id', license.id);
+        try {
+          await db.from('licenses').update({ status: 'expired' }).eq('id', license.id);
+        } catch {}
       }
       return jsonResponse(
-        { success: false, code: 'LICENSE_EXPIRED', message: 'License has expired.' },
+        { success: false, code: 'LICENSE_EXPIRED', error: 'LICENSE_EXPIRED', message: 'License has expired.' },
         403,
         request
       );

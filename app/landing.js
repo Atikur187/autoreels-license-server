@@ -138,8 +138,8 @@ export default function PricingLandingPage() {
           };
         };
 
-        // 5. Initialize Paddle once with comprehensive eventCallback
-        window.Paddle.Initialize({
+        // 5. Initialize Paddle once with comprehensive eventCallback & Paddle Retain
+        const initOptions = {
           token: config.clientToken,
           eventCallback: function (event) {
             if (!event) return;
@@ -183,7 +183,13 @@ export default function PricingLandingPage() {
               });
               if (isMounted) {
                 setLastPaddleError(extracted);
-                setPricingNotice(`Paddle Checkout Error [${extracted.code}]: ${extracted.detail}`);
+                const isDefaultUrlError =
+                  extracted.detail?.includes('transaction_default_checkout_url_not_set') ||
+                  extracted.code === 'validation';
+                const userMessage = isDefaultUrlError
+                  ? 'Paddle Setup Required: Please configure your Default Payment Link in your Paddle Dashboard: Go to Checkout → Checkout Settings → Default Payment Link and enter: https://autoreels-license-server.vercel.app/pricing'
+                  : `Paddle Checkout Error [${extracted.code}]: ${extracted.detail}`;
+                setPricingNotice(userMessage);
               }
             }
 
@@ -241,9 +247,16 @@ export default function PricingLandingPage() {
             // Handler 7: General / other events
             else {
               console.log(`[Paddle Event: ${eventName}]:`, event.data);
-            }
           }
-        });
+        };
+
+        // Paddle Retain: Pass signed-in customer's Paddle Customer ID (must start with ctm_...)
+        const custId = config.paddleCustomerId || config.customerId;
+        if (custId && typeof custId === 'string' && custId.startsWith('ctm_')) {
+          initOptions.pwCustomer = { id: custId };
+        }
+
+        window.Paddle.Initialize(initOptions);
 
         paddleInitializedRef.current = true;
         paddleInitCountRef.current += 1;

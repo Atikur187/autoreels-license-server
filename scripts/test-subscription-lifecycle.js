@@ -20,9 +20,27 @@
 
 import { getSubscription, checkCustomerAccess } from '../lib/db-service.js';
 import crypto from 'crypto';
+import fs from 'fs';
+import path from 'path';
 
-const secret = process.env.PADDLE_WEBHOOK_SECRET;
-const baseUrl = 'http://localhost:3500';
+// Load .env.local if present
+try {
+  const envPath = path.resolve('.env.local');
+  if (fs.existsSync(envPath)) {
+    const lines = fs.readFileSync(envPath, 'utf8').split('\n');
+    for (const line of lines) {
+      const match = line.match(/^\s*([A-Za-z0-9_]+)\s*=\s*(.*?)\s*$/);
+      if (match && !match[1].startsWith('#')) {
+        if (!process.env[match[1]]) {
+          process.env[match[1]] = match[2].trim();
+        }
+      }
+    }
+  }
+} catch {}
+
+const secret = (process.env.PADDLE_WEBHOOK_SECRET || '').trim();
+const baseUrl = process.env.TEST_BASE_URL || 'http://localhost:3500';
 
 async function sendWebhookEvent(eventType, eventData) {
   const payload = JSON.stringify({
