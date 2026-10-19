@@ -988,6 +988,7 @@ export default function PricingLandingPage() {
             <a href="#pricing" style={styles.footerLink}>Pricing</a>
             <a href="#faq" style={styles.footerLink}>FAQ & Refunds</a>
             <a href="/dashboard" style={styles.footerLink}>License Lookup</a>
+            <a href="/admin" style={styles.footerLink}>Admin Login</a>
           </div>
         </div>
       </footer>
