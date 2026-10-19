@@ -15,14 +15,6 @@ export default function PricingLandingPage() {
   const [openingPlanId, setOpeningPlanId] = useState(null);
   const [pricingNotice, setPricingNotice] = useState('');
 
-  // 7-Day Free Trial Modal State
-  const [showTrialModal, setShowTrialModal] = useState(false);
-  const [trialEmail, setTrialEmail] = useState('');
-  const [trialLoading, setTrialLoading] = useState(false);
-  const [trialError, setTrialError] = useState('');
-  const [trialResult, setTrialResult] = useState(null);
-  const [copiedTrialKey, setCopiedTrialKey] = useState(false);
-
   // Paddle.js Single-Initialization and Development Diagnostic State
   const [paddleConfig, setPaddleConfig] = useState(null);
   const [paddleInitStatus, setPaddleInitStatus] = useState('loading'); // 'loading' | 'initialized' | 'error'
@@ -296,25 +288,6 @@ export default function PricingLandingPage() {
 
   const plans = [
     {
-      id: '7day',
-      title: '7-Day Free Trial',
-      duration: '7 Days Access',
-      priceUsd: '$0.00',
-      priceSub: 'Free trial • 7 Days Access',
-      subtitle: 'Zero friction instant trial. No credit card required.',
-      features: [
-        'Access to supported platforms',
-        'Smart HTML5 video-completion detection',
-        'One trial activation',
-        'No credit card required',
-        'Easy activation'
-      ],
-      isFree: true,
-      popular: false,
-      badge: 'Free Trial',
-      buttonText: 'Start 7-Day Free Trial'
-    },
-    {
       id: '30day',
       title: '1 Month Pass',
       duration: '30 Days Access',
@@ -409,13 +382,6 @@ export default function PricingLandingPage() {
   ];
 
   const handleOpenCheckout = async (plan) => {
-    if (plan.isFree) {
-      setTrialError('');
-      setTrialResult(null);
-      setShowTrialModal(true);
-      return;
-    }
-
     // Launch official Paddle.js overlay checkout
     setOpeningPlanId(plan.id);
     setPricingNotice('');
@@ -514,43 +480,6 @@ export default function PricingLandingPage() {
       setPricingNotice('Connection error contacting checkout service. Please try again.');
     } finally {
       setOpeningPlanId(null);
-    }
-  };
-
-  const handleClaimTrial = async (e) => {
-    e.preventDefault();
-    if (!trialEmail || !trialEmail.includes('@') || trialEmail.trim().length < 5) {
-      setTrialError('Please enter a valid email address.');
-      return;
-    }
-
-    setTrialLoading(true);
-    setTrialError('');
-    try {
-      const res = await fetch('/api/checkout/create-trial', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ email: trialEmail.trim() })
-      });
-      const data = await res.json();
-      if (!res.ok || !data.success) {
-        setTrialError(data.error || 'Failed to generate 7-day trial license.');
-        setTrialLoading(false);
-        return;
-      }
-      setTrialResult(data);
-    } catch (err) {
-      setTrialError('Connection error: ' + err.message);
-    } finally {
-      setTrialLoading(false);
-    }
-  };
-
-  const handleCopyTrialKey = () => {
-    if (trialResult?.licenseKey) {
-      navigator.clipboard.writeText(trialResult.licenseKey);
-      setCopiedTrialKey(true);
-      setTimeout(() => setCopiedTrialKey(false), 2500);
     }
   };
 
@@ -875,11 +804,10 @@ export default function PricingLandingPage() {
           </p>
         </div>
 
-        <div className="pricing-four-grid">
+        <div className="pricing-three-grid">
           {plans.map((p) => {
             const isYearly = p.id === 'yearly';
             const isLifetime = p.id === 'lifetime';
-            const isFree = p.isFree;
 
             let cardBorder = '1px solid var(--border)';
             let cardShadow = 'none';
@@ -889,8 +817,6 @@ export default function PricingLandingPage() {
             } else if (isLifetime) {
               cardBorder = '1px solid rgba(245, 158, 11, 0.5)';
               cardShadow = '0 12px 36px rgba(245, 158, 11, 0.15)';
-            } else if (isFree) {
-              cardBorder = '1px solid rgba(16, 185, 129, 0.4)';
             }
 
             let badgeBg = 'rgba(255, 255, 255, 0.08)';
@@ -901,20 +827,13 @@ export default function PricingLandingPage() {
             } else if (isLifetime) {
               badgeBg = 'linear-gradient(135deg, #f59e0b 0%, #d97706 100%)';
               badgeColor = '#070b14';
-            } else if (isFree) {
-              badgeBg = 'rgba(16, 185, 129, 0.2)';
-              badgeColor = '#10b981';
             }
 
             let btnBg = 'var(--bg-elevated)';
             let btnColor = 'var(--text-primary)';
             let btnBorder = '1px solid var(--border)';
 
-            if (isFree) {
-              btnBg = '#10b981';
-              btnColor = '#070b14';
-              btnBorder = 'none';
-            } else if (isYearly) {
+            if (isYearly) {
               btnBg = 'linear-gradient(135deg, #00f2fe 0%, #4facfe 100%)';
               btnColor = '#070b14';
               btnBorder = 'none';
@@ -931,7 +850,7 @@ export default function PricingLandingPage() {
                   ...styles.planCard,
                   borderColor: cardBorder,
                   boxShadow: cardShadow,
-                  transform: isYearly ? 'scale(1.02)' : 'none',
+                  transform: isYearly ? 'scale(1.03)' : 'none',
                   zIndex: isYearly ? 2 : 1
                 }}
               >
@@ -941,7 +860,6 @@ export default function PricingLandingPage() {
                       ...styles.planBadgeHeader,
                       background: badgeBg,
                       color: badgeColor,
-                      border: isFree ? '1px solid rgba(16, 185, 129, 0.4)' : 'none',
                       fontWeight: 800
                     }}
                   >
@@ -962,7 +880,7 @@ export default function PricingLandingPage() {
                 <ul style={styles.featureList}>
                   {p.features.map((f, i) => (
                     <li key={i} style={styles.featureItem}>
-                      <span style={{ color: isFree ? 'var(--success)' : 'var(--accent)', fontWeight: 'bold' }}>✓</span>
+                      <span style={{ color: 'var(--accent)', fontWeight: 'bold' }}>✓</span>
                       <span>{f}</span>
                     </li>
                   ))}
@@ -987,98 +905,6 @@ export default function PricingLandingPage() {
             );
           })}
         </div>
-
-        {/* 7-Day Free Trial Modal */}
-        {showTrialModal && (
-          <div style={styles.modalOverlay} onClick={() => setShowTrialModal(false)}>
-            <div style={styles.modalCard} onClick={(e) => e.stopPropagation()}>
-              <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '16px' }}>
-                <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
-                  <span style={{ fontSize: '22px' }}>🎁</span>
-                  <h3 style={{ margin: 0, fontSize: '20px', fontWeight: 800, color: '#fff' }}>
-                    {trialResult ? 'Your Free Trial Is Ready!' : 'Start 7-Day Free Trial'}
-                  </h3>
-                </div>
-                <button
-                  onClick={() => setShowTrialModal(false)}
-                  style={{ color: 'var(--text-dim)', fontSize: '18px', cursor: 'pointer' }}
-                  title="Close"
-                >
-                  ✕
-                </button>
-              </div>
-
-              {trialResult ? (
-                <div>
-                  <div style={styles.trialSuccessBox}>
-                    <span style={{ fontSize: '12px', color: 'var(--success)', fontWeight: 700, textTransform: 'uppercase' }}>
-                      ✔ 7-Day Trial License Active
-                    </span>
-                    <div style={styles.trialKeyDisplay}>{trialResult.licenseKey}</div>
-                    <div style={{ fontSize: '12px', color: 'var(--text-secondary)', marginTop: '4px' }}>
-                      Access: <strong>7 Days</strong> • Limits: <strong>1 Trial Activation</strong>
-                    </div>
-                  </div>
-
-                  <div style={{ display: 'flex', gap: '10px', marginTop: '16px' }}>
-                    <button onClick={handleCopyTrialKey} style={styles.trialCopyBtn}>
-                      {copiedTrialKey ? '✔ Copied to Clipboard!' : '📋 Copy License Key'}
-                    </button>
-                    <button onClick={() => setShowTrialModal(false)} style={styles.trialCloseBtn}>
-                      Done
-                    </button>
-                  </div>
-
-                  <div style={styles.trialGuideBox}>
-                    <div style={{ fontWeight: 700, color: 'var(--accent)', marginBottom: '6px' }}>
-                      🚀 How to activate in Chrome:
-                    </div>
-                    <ol style={{ margin: 0, paddingLeft: '18px', color: 'var(--text-secondary)', fontSize: '12px', lineHeight: 1.6 }}>
-                      <li>Click <strong>Copy License Key</strong> above.</li>
-                      <li>Open the <strong>AutoReels Scroll</strong> extension icon in your Chrome toolbar.</li>
-                      <li>Paste the key into the activation field and click <strong>Activate</strong>!</li>
-                    </ol>
-                  </div>
-                </div>
-              ) : (
-                <form onSubmit={handleClaimTrial} style={{ display: 'flex', flexDirection: 'column', gap: '14px' }}>
-                  <p style={{ margin: 0, fontSize: '13px', color: 'var(--text-secondary)', lineHeight: 1.5 }}>
-                    Enter your email to receive your unique 7-day trial license. No credit card required. Full premium access to all 4 platforms.
-                  </p>
-
-                  <div style={{ display: 'flex', flexDirection: 'column', gap: '6px' }}>
-                    <label style={{ fontSize: '12px', fontWeight: 700, textTransform: 'uppercase', color: 'var(--text-primary)' }}>
-                      Your Email Address
-                    </label>
-                    <input
-                      type="email"
-                      placeholder="name@example.com"
-                      value={trialEmail}
-                      onChange={(e) => setTrialEmail(e.target.value)}
-                      style={styles.trialInput}
-                      autoFocus
-                      required
-                    />
-                  </div>
-
-                  {trialError && (
-                    <div style={styles.trialErrorBanner}>
-                      ⚠️ {trialError}
-                    </div>
-                  )}
-
-                  <button type="submit" disabled={trialLoading} style={styles.trialSubmitBtn}>
-                    {trialLoading ? 'Generating 7-Day License...' : 'Claim 7-Day Free Trial →'}
-                  </button>
-
-                  <span style={{ fontSize: '11px', color: 'var(--text-dim)', textAlign: 'center' }}>
-                    🔒 1 free trial per email address. Server-side abuse protection active.
-                  </span>
-                </form>
-              )}
-            </div>
-          </div>
-        )}
       </section>
 
       {/* Customer Testimonials */}
@@ -1635,16 +1461,9 @@ const styles = {
   },
   plansGrid: {
     display: 'grid',
-    gridTemplateColumns: 'repeat(auto-fit, minmax(260px, 1fr))',
+    gridTemplateColumns: 'repeat(auto-fit, minmax(300px, 1fr))',
     gap: '24px',
     alignItems: 'stretch'
-  },
-  freeTrialNotice: {
-    padding: '14px 16px',
-    backgroundColor: 'rgba(16, 185, 129, 0.12)',
-    border: '1px solid rgba(16, 185, 129, 0.3)',
-    borderRadius: '10px',
-    marginBottom: '16px'
   },
   planCard: {
     backgroundColor: 'var(--bg-surface)',
@@ -1980,112 +1799,5 @@ const styles = {
     fontSize: '13px',
     fontWeight: 600,
     cursor: 'pointer'
-  },
-  modalOverlay: {
-    position: 'fixed',
-    top: 0,
-    left: 0,
-    right: 0,
-    bottom: 0,
-    backgroundColor: 'rgba(0, 0, 0, 0.8)',
-    backdropFilter: 'blur(8px)',
-    display: 'flex',
-    alignItems: 'center',
-    justifyContent: 'center',
-    zIndex: 1000,
-    padding: '20px'
-  },
-  modalCard: {
-    backgroundColor: '#0f172a',
-    border: '1px solid rgba(255, 255, 255, 0.14)',
-    borderRadius: '20px',
-    padding: '32px',
-    maxWidth: '480px',
-    width: '100%',
-    boxShadow: '0 25px 50px -12px rgba(0, 0, 0, 0.7)',
-    position: 'relative',
-    color: '#fff'
-  },
-  trialSuccessBox: {
-    backgroundColor: 'rgba(16, 185, 129, 0.08)',
-    border: '1px solid rgba(16, 185, 129, 0.3)',
-    borderRadius: '12px',
-    padding: '18px',
-    textAlign: 'center',
-    marginTop: '12px'
-  },
-  trialKeyDisplay: {
-    fontFamily: 'monospace',
-    fontSize: '20px',
-    fontWeight: 800,
-    letterSpacing: '2px',
-    color: '#10b981',
-    backgroundColor: 'rgba(0, 0, 0, 0.5)',
-    padding: '12px',
-    borderRadius: '8px',
-    border: '1px dashed rgba(16, 185, 129, 0.5)',
-    margin: '12px 0',
-    wordBreak: 'break-all'
-  },
-  trialCopyBtn: {
-    flex: 1,
-    backgroundColor: '#10b981',
-    color: '#070b14',
-    border: 'none',
-    borderRadius: '8px',
-    padding: '12px 16px',
-    fontWeight: 700,
-    fontSize: '13px',
-    cursor: 'pointer',
-    transition: 'all 0.2s'
-  },
-  trialCloseBtn: {
-    backgroundColor: 'rgba(255, 255, 255, 0.08)',
-    color: 'var(--text-secondary)',
-    border: '1px solid rgba(255, 255, 255, 0.12)',
-    borderRadius: '8px',
-    padding: '12px 20px',
-    fontWeight: 600,
-    fontSize: '13px',
-    cursor: 'pointer'
-  },
-  trialGuideBox: {
-    marginTop: '18px',
-    padding: '14px',
-    backgroundColor: 'rgba(255, 255, 255, 0.03)',
-    border: '1px solid rgba(255, 255, 255, 0.06)',
-    borderRadius: '10px'
-  },
-  trialInput: {
-    width: '100%',
-    padding: '12px 14px',
-    borderRadius: '8px',
-    backgroundColor: 'rgba(255, 255, 255, 0.05)',
-    border: '1px solid rgba(255, 255, 255, 0.15)',
-    color: '#fff',
-    fontSize: '14px',
-    outline: 'none',
-    boxSizing: 'border-box'
-  },
-  trialErrorBanner: {
-    backgroundColor: 'rgba(239, 68, 68, 0.12)',
-    border: '1px solid rgba(239, 68, 68, 0.3)',
-    color: '#ef4444',
-    padding: '10px 14px',
-    borderRadius: '8px',
-    fontSize: '13px'
-  },
-  trialSubmitBtn: {
-    width: '100%',
-    backgroundColor: '#10b981',
-    color: '#070b14',
-    border: 'none',
-    borderRadius: '8px',
-    padding: '14px',
-    fontWeight: 700,
-    fontSize: '14px',
-    cursor: 'pointer',
-    transition: 'all 0.2s',
-    marginTop: '4px'
   }
 };

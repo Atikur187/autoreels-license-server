@@ -41,7 +41,7 @@ export async function GET(request) {
       requiresPayment: false,
       paddlePriceId: 'N/A (Backend provisioned)',
       badge: 'Free Trial',
-      status: 'Active'
+      status: 'Disabled'
     },
     {
       id: '30day',

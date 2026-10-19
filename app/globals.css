@@ -75,3 +75,26 @@ input, select {
   }
 }
 
+.pricing-three-grid {
+  display: grid;
+  grid-template-columns: repeat(3, 1fr);
+  gap: 24px;
+  align-items: stretch;
+  max-width: 1200px;
+  margin: 0 auto;
+}
+
+@media (max-width: 1024px) {
+  .pricing-three-grid {
+    grid-template-columns: repeat(2, 1fr);
+    gap: 20px;
+  }
+}
+
+@media (max-width: 680px) {
+  .pricing-three-grid {
+    grid-template-columns: 1fr;
+    gap: 16px;
+  }
+}
+
