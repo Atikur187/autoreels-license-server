@@ -124,7 +124,7 @@ export default function PricingLandingPage() {
 
           const documentation_url = event.documentation_url || errObj.documentation_url || d.documentation_url || 
                                     event.documentationUrl || errObj.documentationUrl || d.documentationUrl || 'N/A';
-          const request_id = event.request_id || errObj.request_id || d.request_id || 
+          const request_id = d.meta?.request_id || event.request_id || errObj.request_id || d.request_id || 
                              event.requestId || errObj.requestId || d.requestId || 'N/A';
 
           return {
@@ -804,6 +804,93 @@ export default function PricingLandingPage() {
           </p>
         </div>
 
+        {/* Real Paddle Checkout Diagnostic / Error Banner */}
+        {(pricingNotice || lastPaddleError) && (
+          <div style={styles.checkoutErrorBanner} id="paddle-diagnostic-alert">
+            <div style={styles.checkoutErrorHeader}>
+              <div style={{ display: 'flex', alignItems: 'center', gap: '10px' }}>
+                <span style={{ fontSize: '20px' }}>⚠️</span>
+                <div>
+                  <div style={{ fontWeight: 700, fontSize: '15px', color: '#f87171' }}>
+                    {lastPaddleError?.code && lastPaddleError.code !== 'UNKNOWN_CODE'
+                      ? `Paddle Error: ${lastPaddleError.code}`
+                      : 'Paddle Checkout Notice'}
+                  </div>
+                  <div style={{ fontSize: '12px', color: '#94a3b8' }}>
+                    Event: <code style={styles.codeTag}>{lastPaddleError?.name || 'checkout.error'}</code>
+                    {lastPaddleError?.request_id && lastPaddleError.request_id !== 'N/A' && (
+                      <span style={{ marginLeft: '8px' }}>
+                        Request ID: <code style={styles.codeTag}>{lastPaddleError.request_id}</code>
+                      </span>
+                    )}
+                  </div>
+                </div>
+              </div>
+              <button
+                onClick={() => {
+                  setPricingNotice('');
+                  setLastPaddleError(null);
+                }}
+                style={styles.alertDismissBtn}
+                title="Dismiss"
+              >
+                ✕
+              </button>
+            </div>
+
+            <div style={styles.checkoutErrorBody}>
+              <p style={{ margin: '0 0 10px 0', fontSize: '13px', lineHeight: 1.5, color: '#fca5a5' }}>
+                {lastPaddleError?.detail || pricingNotice}
+              </p>
+
+              {/* Special Action Guide for Default Payment Link */}
+              {(lastPaddleError?.code === 'transaction_default_checkout_url_not_set' ||
+                (lastPaddleError?.detail && lastPaddleError.detail.includes('default payment link'))) && (
+                <div style={styles.dashboardActionBox}>
+                  <div style={{ fontWeight: 700, color: '#fbbf24', marginBottom: '6px', fontSize: '13px' }}>
+                    🛠️ Immediate Action Required in Paddle Dashboard:
+                  </div>
+                  <ol style={{ margin: 0, paddingLeft: '18px', fontSize: '12px', color: '#e2e8f0', lineHeight: 1.6 }}>
+                    <li>
+                      Open your{' '}
+                      <a
+                        href="https://sandbox-vendors.paddle.com/checkout-settings"
+                        target="_blank"
+                        rel="noopener noreferrer"
+                        style={{ color: '#38bdf8', textDecoration: 'underline' }}
+                      >
+                        Paddle Sandbox Dashboard → Checkout Settings
+                      </a>
+                    </li>
+                    <li>Find the <strong>Default payment link</strong> setting.</li>
+                    <li>
+                      Enter your live pricing URL:{' '}
+                      <code style={{ ...styles.codeTag, color: '#38bdf8', background: 'rgba(0,0,0,0.4)' }}>
+                        https://autoreels-license-server.vercel.app/pricing
+                      </code>
+                    </li>
+                    <li>Click <strong>Save</strong> in Paddle Dashboard, then refresh this page and click your plan button again.</li>
+                  </ol>
+                </div>
+              )}
+
+              {lastPaddleError?.documentation_url && lastPaddleError.documentation_url !== 'N/A' && (
+                <div style={{ marginTop: '10px', fontSize: '12px' }}>
+                  📖 Paddle Docs Reference:{' '}
+                  <a
+                    href={lastPaddleError.documentation_url}
+                    target="_blank"
+                    rel="noopener noreferrer"
+                    style={{ color: '#38bdf8', textDecoration: 'underline' }}
+                  >
+                    {lastPaddleError.documentation_url}
+                  </a>
+                </div>
+              )}
+            </div>
+          </div>
+        )}
+
         <div className="pricing-three-grid">
           {plans.map((p) => {
             const isYearly = p.id === 'yearly';
@@ -904,6 +991,76 @@ export default function PricingLandingPage() {
               </div>
             );
           })}
+        </div>
+
+        {/* Paddle Integration Diagnostics Bar */}
+        <div style={styles.diagnosticsContainer}>
+          <div
+            style={styles.diagnosticsToggleHeader}
+            onClick={() => setShowDiagnostics(!showDiagnostics)}
+          >
+            <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
+              <span style={{ fontSize: '14px' }}>⚙️</span>
+              <span style={{ fontSize: '12px', fontWeight: 600, color: 'var(--text-secondary)' }}>
+                Integration Diagnostics ({paddleInitStatus === 'initialized' ? 'Paddle.js Ready' : paddleInitStatus})
+              </span>
+              <span
+                style={{
+                  display: 'inline-block',
+                  width: '8px',
+                  height: '8px',
+                  borderRadius: '50%',
+                  backgroundColor: paddleInitStatus === 'initialized' ? '#10b981' : '#f59e0b'
+                }}
+              ></span>
+            </div>
+            <span style={{ fontSize: '12px', color: 'var(--accent)' }}>
+              {showDiagnostics ? 'Hide Diagnostics ▲' : 'Show Diagnostics ▼'}
+            </span>
+          </div>
+
+          {showDiagnostics && (
+            <div style={styles.diagnosticsContent}>
+              <div style={styles.diagGrid}>
+                <div style={styles.diagItem}>
+                  <div style={styles.diagLabel}>Paddle Environment</div>
+                  <div style={styles.diagValue}>
+                    {paddleConfig?.environment || 'sandbox'} {paddleConfig?.isProduction ? '(Live)' : '(Sandbox)'}
+                  </div>
+                </div>
+                <div style={styles.diagItem}>
+                  <div style={styles.diagLabel}>Client Token (Prefix)</div>
+                  <div style={styles.diagValue}>
+                    <code>{paddleConfig?.diagnostics?.tokenPrefix || 'test_'} (Masked: {paddleConfig?.diagnostics?.maskedToken || 'N/A'})</code>
+                  </div>
+                </div>
+                <div style={styles.diagItem}>
+                  <div style={styles.diagLabel}>1 Month Pass ($1.49)</div>
+                  <div style={styles.diagValue}>
+                    <code>{paddleConfig?.diagnostics?.prices?.['30day']?.id || 'pri_01m2b6436f3ss2z4a2zphtx2r2'}</code>
+                  </div>
+                </div>
+                <div style={styles.diagItem}>
+                  <div style={styles.diagLabel}>1 Year Pro ($9.49)</div>
+                  <div style={styles.diagValue}>
+                    <code>{paddleConfig?.diagnostics?.prices?.['yearly']?.id || 'pri_01m2b649m3xr3rey1zepakqza8'}</code>
+                  </div>
+                </div>
+                <div style={styles.diagItem}>
+                  <div style={styles.diagLabel}>Lifetime VIP ($19.99)</div>
+                  <div style={styles.diagValue}>
+                    <code>{paddleConfig?.diagnostics?.prices?.['lifetime']?.id || 'pri_01m2b649zy4hemgsgazma491fj'}</code>
+                  </div>
+                </div>
+                <div style={styles.diagItem}>
+                  <div style={styles.diagLabel}>Last Paddle Event</div>
+                  <div style={styles.diagValue}>
+                    {lastPaddleEvent ? `${lastPaddleEvent.name} at ${lastPaddleEvent.time}` : 'None yet'}
+                  </div>
+                </div>
+              </div>
+            </div>
+          )}
         </div>
       </section>
 
@@ -1800,5 +1957,83 @@ const styles = {
     fontSize: '13px',
     fontWeight: 600,
     cursor: 'pointer'
+  },
+  checkoutErrorBanner: {
+    maxWidth: '900px',
+    margin: '0 auto 32px',
+    backgroundColor: 'rgba(239, 68, 68, 0.08)',
+    border: '1px solid rgba(239, 68, 68, 0.3)',
+    borderRadius: '12px',
+    padding: '18px 22px',
+    boxShadow: '0 8px 24px rgba(0, 0, 0, 0.4)'
+  },
+  checkoutErrorHeader: {
+    display: 'flex',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+    marginBottom: '10px'
+  },
+  alertDismissBtn: {
+    background: 'transparent',
+    border: 'none',
+    color: '#94a3b8',
+    fontSize: '16px',
+    cursor: 'pointer',
+    padding: '4px 8px',
+    borderRadius: '4px'
+  },
+  checkoutErrorBody: {
+    paddingLeft: '30px'
+  },
+  dashboardActionBox: {
+    backgroundColor: 'rgba(245, 158, 11, 0.08)',
+    border: '1px solid rgba(245, 158, 11, 0.25)',
+    borderRadius: '8px',
+    padding: '12px 16px',
+    marginTop: '10px'
+  },
+  diagnosticsContainer: {
+    maxWidth: '900px',
+    margin: '36px auto 0',
+    backgroundColor: 'rgba(255, 255, 255, 0.02)',
+    border: '1px solid rgba(255, 255, 255, 0.08)',
+    borderRadius: '12px',
+    overflow: 'hidden'
+  },
+  diagnosticsToggleHeader: {
+    display: 'flex',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+    padding: '12px 18px',
+    cursor: 'pointer',
+    backgroundColor: 'rgba(255, 255, 255, 0.03)',
+    userSelect: 'none'
+  },
+  diagnosticsContent: {
+    padding: '16px 18px',
+    borderTop: '1px solid rgba(255, 255, 255, 0.06)'
+  },
+  diagGrid: {
+    display: 'grid',
+    gridTemplateColumns: 'repeat(auto-fit, minmax(260px, 1fr))',
+    gap: '12px'
+  },
+  diagItem: {
+    backgroundColor: 'rgba(0, 0, 0, 0.25)',
+    padding: '10px 12px',
+    borderRadius: '8px',
+    border: '1px solid rgba(255, 255, 255, 0.04)'
+  },
+  diagLabel: {
+    fontSize: '11px',
+    color: 'var(--text-dim)',
+    textTransform: 'uppercase',
+    letterSpacing: '0.5px',
+    marginBottom: '4px'
+  },
+  diagValue: {
+    fontSize: '12px',
+    color: 'var(--text-primary)',
+    wordBreak: 'break-all'
   }
 };
