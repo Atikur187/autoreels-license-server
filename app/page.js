@@ -3,6 +3,67 @@
 import React, { useState, useEffect, useRef } from 'react';
 import './globals.css';
 
+// Helper to authoritatively extract detailed Paddle error fields from any event structure
+function extractPaddleDetails(event) {
+  if (!event) return null;
+  const d = (event.data && typeof event.data === 'object') ? event.data : {};
+  const errObj = (d.error && typeof d.error === 'object')
+    ? d.error
+    : (Array.isArray(d.errors) && d.errors.length > 0 && typeof d.errors[0] === 'object')
+    ? d.errors[0]
+    : d;
+
+  const name = event.name || event.type || d.name || 'checkout.error';
+  const type = event.type || errObj.type || d.type || (typeof event.data === 'string' ? 'string_error' : 'error');
+  let code = event.code || errObj.code || d.code || errObj.error_code || d.error_code || 'UNKNOWN_CODE';
+  
+  let detail = event.detail || errObj.detail || d.detail || 
+               event.message || errObj.message || d.message || 
+               errObj.description || d.description || 
+               errObj.error_description || d.error_description || '';
+
+  // Authoritatively detect the Default Payment Link error in code or detail
+  const isDefaultPaymentLinkError = 
+    code === 'transaction_default_checkout_url_not_set' ||
+    detail === 'transaction_default_checkout_url_not_set' ||
+    (typeof detail === 'string' && (
+      detail.includes('transaction_default_checkout_url_not_set') ||
+      detail.toLowerCase().includes('default payment link')
+    ));
+
+  if (isDefaultPaymentLinkError) {
+    code = 'transaction_default_checkout_url_not_set';
+    detail = 'Cannot create a transaction or open a checkout as no default payment link has been set for this account. Set in the Paddle dashboard, then try again.';
+  } else if (!detail) {
+    if (typeof event.data === 'string' && event.data.trim()) {
+      detail = event.data;
+    } else if (typeof d === 'object' && Object.keys(d).length > 0) {
+      detail = JSON.stringify(d);
+    } else {
+      detail = 'No specific error detail provided by Paddle.';
+    }
+  }
+
+  const documentation_url = isDefaultPaymentLinkError
+    ? 'https://developer.paddle.com/v1/errors/transactions/transaction_default_checkout_url_not_set'
+    : (event.documentation_url || errObj.documentation_url || d.documentation_url || 
+       event.documentationUrl || errObj.documentationUrl || d.documentationUrl || 'N/A');
+
+  const request_id = d.meta?.request_id || event.request_id || errObj.request_id || d.request_id || 
+                     event.requestId || errObj.requestId || d.requestId || 'N/A';
+
+  return {
+    name,
+    type,
+    code,
+    detail: String(detail),
+    documentation_url,
+    request_id,
+    isDefaultPaymentLinkError,
+    raw: event.data !== undefined ? event.data : event
+  };
+}
+
 export default function PricingLandingPage() {
   // Simulator State
   const [activePlatform, setActivePlatform] = useState('youtube');
@@ -29,6 +90,102 @@ export default function PricingLandingPage() {
   const paddleInitCountRef = useRef(0);
   const isMountedRef = useRef(true);
 
+  // Central Paddle Event Callback Handler
+  const handlePaddleEvent = (event) => {
+    if (!event) return;
+    const eventName = event.name || event.type || 'unknown';
+
+    if (typeof window !== 'undefined') {
+      window.__lastPaddleRawEvent = event;
+    }
+
+    setLastPaddleEvent({
+      name: eventName,
+      data: event.data,
+      time: new Date().toLocaleTimeString()
+    });
+
+    // Handler 1: checkout.completed
+    if (eventName === 'checkout.completed') {
+      console.log('[Paddle checkout.completed]:', event.data);
+      const txnId = event.data?.transaction_id || event.data?.id;
+      if (txnId) {
+        window.location.href = `/checkout/success?transaction_id=${encodeURIComponent(txnId)}`;
+      }
+    }
+
+    // Handler 2: checkout.error (Separate explicit handler)
+    else if (eventName === 'checkout.error') {
+      const extracted = extractPaddleDetails(event);
+      if (typeof window !== 'undefined') {
+        window.__lastPaddleError = extracted;
+      }
+      console.error('[Paddle checkout.error]:', {
+        'event.name': extracted.name,
+        'event.type': extracted.type,
+        'event.code': extracted.code,
+        'event.detail': extracted.detail,
+        'event.documentation_url': extracted.documentation_url,
+        'request_id': extracted.request_id,
+        'raw_event': event
+      });
+      setLastPaddleError(extracted);
+      setPricingNotice(`Paddle Checkout Error [${extracted.code}]: ${extracted.detail}`);
+    }
+
+    // Handler 3: checkout.warning (Separate explicit handler)
+    else if (eventName === 'checkout.warning') {
+      const extracted = extractPaddleDetails(event);
+      if (typeof window !== 'undefined') {
+        window.__lastPaddleWarning = extracted;
+      }
+      console.warn('[Paddle checkout.warning]:', {
+        'event.name': extracted.name,
+        'event.type': extracted.type,
+        'event.code': extracted.code,
+        'event.detail': extracted.detail,
+        'event.documentation_url': extracted.documentation_url,
+        'request_id': extracted.request_id,
+        'raw_event': event
+      });
+      setLastPaddleWarning(extracted);
+    }
+
+    // Handler 4: checkout.payment.error (Separate explicit handler)
+    else if (eventName === 'checkout.payment.error') {
+      const extracted = extractPaddleDetails(event);
+      if (typeof window !== 'undefined') {
+        window.__lastPaddleError = extracted;
+      }
+      console.error('[Paddle checkout.payment.error]:', {
+        'event.name': extracted.name,
+        'event.type': extracted.type,
+        'event.code': extracted.code,
+        'event.detail': extracted.detail,
+        'event.documentation_url': extracted.documentation_url,
+        'request_id': extracted.request_id,
+        'raw_event': event
+      });
+      setLastPaddleError(extracted);
+      setPricingNotice(`Paddle Payment Error [${extracted.code}]: ${extracted.detail}`);
+    }
+
+    // Handler 5: checkout.loaded
+    else if (eventName === 'checkout.loaded') {
+      console.log('[Paddle checkout.loaded]:', event.data);
+    }
+
+    // Handler 6: checkout.closed
+    else if (eventName === 'checkout.closed') {
+      console.log('[Paddle checkout.closed]:', event.data);
+    }
+
+    // Handler 7: General / other events
+    else {
+      console.log(`[Paddle Event: ${eventName}]:`, event.data);
+    }
+  };
+
   // FAQ Accordion State
   const [expandedFaq, setExpandedFaq] = useState(0);
 
@@ -49,7 +206,7 @@ export default function PricingLandingPage() {
         // 1. Fetch public configuration
         const res = await fetch('/api/checkout/config');
         const config = await res.json();
-        if (!isMounted) return;
+        if (!isMountedRef.current) return;
         setPaddleConfig(config);
 
         if (!config.success || !config.clientToken) {
@@ -78,7 +235,7 @@ export default function PricingLandingPage() {
         }
 
         if (!window.Paddle) {
-          if (!isMounted) return;
+          if (!isMountedRef.current) return;
           setPaddleInitStatus('error');
           setPaddleInitError('Paddle.js script failed to load. Check ad-blocker or network.');
           return;
@@ -94,175 +251,21 @@ export default function PricingLandingPage() {
           window.Paddle.Environment.set('sandbox');
         }
 
-        // Helper to authoritatively extract detailed Paddle error fields from any event structure
-        const extractPaddleDetails = (event) => {
-          if (!event) return null;
-          const d = (event.data && typeof event.data === 'object') ? event.data : {};
-          const errObj = (d.error && typeof d.error === 'object')
-            ? d.error
-            : (Array.isArray(d.errors) && d.errors.length > 0 && typeof d.errors[0] === 'object')
-            ? d.errors[0]
-            : d;
-
-          const name = event.name || event.type || d.name || 'checkout.error';
-          const type = event.type || errObj.type || d.type || (typeof event.data === 'string' ? 'string_error' : 'error');
-          let code = event.code || errObj.code || d.code || errObj.error_code || d.error_code || 'UNKNOWN_CODE';
-          
-          let detail = event.detail || errObj.detail || d.detail || 
-                       event.message || errObj.message || d.message || 
-                       errObj.description || d.description || 
-                       errObj.error_description || d.error_description || '';
-
-          // Authoritatively detect the Default Payment Link error in code or detail
-          const isDefaultPaymentLinkError = 
-            code === 'transaction_default_checkout_url_not_set' ||
-            detail === 'transaction_default_checkout_url_not_set' ||
-            (typeof detail === 'string' && (
-              detail.includes('transaction_default_checkout_url_not_set') ||
-              detail.toLowerCase().includes('default payment link')
-            ));
-
-          if (isDefaultPaymentLinkError) {
-            code = 'transaction_default_checkout_url_not_set';
-            detail = 'Cannot create a transaction or open a checkout as no default payment link has been set for this account. Set in the Paddle dashboard, then try again.';
-          } else if (!detail) {
-            if (typeof event.data === 'string' && event.data.trim()) {
-              detail = event.data;
-            } else if (typeof d === 'object' && Object.keys(d).length > 0) {
-              detail = JSON.stringify(d);
-            } else {
-              detail = 'No specific error detail provided by Paddle.';
-            }
-          }
-
-          const documentation_url = isDefaultPaymentLinkError
-            ? 'https://developer.paddle.com/v1/errors/transactions/transaction_default_checkout_url_not_set'
-            : (event.documentation_url || errObj.documentation_url || d.documentation_url || 
-               event.documentationUrl || errObj.documentationUrl || d.documentationUrl || 'N/A');
-
-          const request_id = d.meta?.request_id || event.request_id || errObj.request_id || d.request_id || 
-                             event.requestId || errObj.requestId || d.requestId || 'N/A';
-
-          return {
-            name,
-            type,
-            code,
-            detail: String(detail),
-            documentation_url,
-            request_id,
-            isDefaultPaymentLinkError,
-            raw: event.data !== undefined ? event.data : event
-          };
-        };
-
         // 5. Initialize Paddle once with comprehensive eventCallback
         window.Paddle.Initialize({
           token: config.clientToken,
-          eventCallback: function (event) {
-            if (!event) return;
-            const eventName = event.name || event.type || 'unknown';
-
-            if (typeof window !== 'undefined') {
-              window.__lastPaddleRawEvent = event;
-            }
-
-            setLastPaddleEvent({
-              name: eventName,
-              data: event.data,
-              time: new Date().toLocaleTimeString()
-            });
-
-            // Handler 1: checkout.completed
-            if (eventName === 'checkout.completed') {
-              console.log('[Paddle checkout.completed]:', event.data);
-              const txnId = event.data?.transaction_id || event.data?.id;
-              if (txnId) {
-                window.location.href = `/checkout/success?transaction_id=${encodeURIComponent(txnId)}`;
-              }
-            }
-
-            // Handler 2: checkout.error (Separate explicit handler)
-            else if (eventName === 'checkout.error') {
-              const extracted = extractPaddleDetails(event);
-              if (typeof window !== 'undefined') {
-                window.__lastPaddleError = extracted;
-              }
-              console.error('[Paddle checkout.error]:', {
-                'event.name': extracted.name,
-                'event.type': extracted.type,
-                'event.code': extracted.code,
-                'event.detail': extracted.detail,
-                'event.documentation_url': extracted.documentation_url,
-                'request_id': extracted.request_id,
-                'raw_event': event
-              });
-              setLastPaddleError(extracted);
-              setPricingNotice(`Paddle Checkout Error [${extracted.code}]: ${extracted.detail}`);
-            }
-
-            // Handler 3: checkout.warning (Separate explicit handler)
-            else if (eventName === 'checkout.warning') {
-              const extracted = extractPaddleDetails(event);
-              if (typeof window !== 'undefined') {
-                window.__lastPaddleWarning = extracted;
-              }
-              console.warn('[Paddle checkout.warning]:', {
-                'event.name': extracted.name,
-                'event.type': extracted.type,
-                'event.code': extracted.code,
-                'event.detail': extracted.detail,
-                'event.documentation_url': extracted.documentation_url,
-                'request_id': extracted.request_id,
-                'raw_event': event
-              });
-              setLastPaddleWarning(extracted);
-            }
-
-            // Handler 4: checkout.payment.error (Separate explicit handler)
-            else if (eventName === 'checkout.payment.error') {
-              const extracted = extractPaddleDetails(event);
-              if (typeof window !== 'undefined') {
-                window.__lastPaddleError = extracted;
-              }
-              console.error('[Paddle checkout.payment.error]:', {
-                'event.name': extracted.name,
-                'event.type': extracted.type,
-                'event.code': extracted.code,
-                'event.detail': extracted.detail,
-                'event.documentation_url': extracted.documentation_url,
-                'request_id': extracted.request_id,
-                'raw_event': event
-              });
-              setLastPaddleError(extracted);
-              setPricingNotice(`Paddle Payment Error [${extracted.code}]: ${extracted.detail}`);
-            }
-
-            // Handler 5: checkout.loaded
-            else if (eventName === 'checkout.loaded') {
-              console.log('[Paddle checkout.loaded]:', event.data);
-            }
-
-            // Handler 6: checkout.closed
-            else if (eventName === 'checkout.closed') {
-              console.log('[Paddle checkout.closed]:', event.data);
-            }
-
-            // Handler 7: General / other events
-            else {
-              console.log(`[Paddle Event: ${eventName}]:`, event.data);
-            }
-          }
+          eventCallback: handlePaddleEvent
         });
 
         paddleInitializedRef.current = true;
         paddleInitCountRef.current += 1;
-        if (isMounted) {
+        if (isMountedRef.current) {
           setPaddleInitStatus('initialized');
           console.log(`[Paddle Initialized Successfully] Env: ${config.environment}, Token: ${config.diagnostics?.tokenPrefix}... (Call count: ${paddleInitCountRef.current})`);
         }
       } catch (err) {
         console.error('[Paddle Initialization Error]:', err);
-        if (isMounted) {
+        if (isMountedRef.current) {
           setPaddleInitStatus('error');
           setPaddleInitError(err.message || 'Error initializing Paddle');
         }
@@ -272,7 +275,7 @@ export default function PricingLandingPage() {
     initializePaddleGateway();
 
     return () => {
-      isMounted = false;
+      isMountedRef.current = false;
     };
   }, []);
 
@@ -411,11 +414,24 @@ export default function PricingLandingPage() {
         return;
       }
 
-      // Check if Paddle is loaded and initialized
-      if (typeof window === 'undefined' || !window.Paddle || !window.Paddle.Checkout) {
+      // Check if Paddle is loaded
+      if (typeof window === 'undefined' || !window.Paddle) {
         setPricingNotice('Payment gateway is still initializing. Please wait a moment and try again.');
         setOpeningPlanId(null);
         return;
+      }
+
+      // Ensure Paddle is initialized before opening checkout
+      if (!paddleInitializedRef.current) {
+        if (data.environment === 'sandbox') {
+          window.Paddle.Environment.set('sandbox');
+        }
+        window.Paddle.Initialize({
+          token: data.clientToken,
+          eventCallback: handlePaddleEvent
+        });
+        paddleInitializedRef.current = true;
+        setPaddleInitStatus('initialized');
       }
 
       // Safe Checkout Configuration Logging (Strictly token prefix only, NO full secret keys)
