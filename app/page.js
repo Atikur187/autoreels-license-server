@@ -27,6 +27,7 @@ export default function PricingLandingPage() {
   const [showDiagnostics, setShowDiagnostics] = useState(true);
   const paddleInitializedRef = useRef(false);
   const paddleInitCountRef = useRef(0);
+  const isMountedRef = useRef(true);
 
   // FAQ Accordion State
   const [expandedFaq, setExpandedFaq] = useState(0);
@@ -41,7 +42,7 @@ export default function PricingLandingPage() {
 
   // Paddle.js Lifecycle: Strictly Single Initialization on Mount
   useEffect(() => {
-    let isMounted = true;
+    isMountedRef.current = true;
 
     async function initializePaddleGateway() {
       try {
@@ -105,14 +106,26 @@ export default function PricingLandingPage() {
 
           const name = event.name || event.type || d.name || 'checkout.error';
           const type = event.type || errObj.type || d.type || (typeof event.data === 'string' ? 'string_error' : 'error');
-          const code = event.code || errObj.code || d.code || errObj.error_code || d.error_code || 'UNKNOWN_CODE';
+          let code = event.code || errObj.code || d.code || errObj.error_code || d.error_code || 'UNKNOWN_CODE';
           
           let detail = event.detail || errObj.detail || d.detail || 
                        event.message || errObj.message || d.message || 
                        errObj.description || d.description || 
                        errObj.error_description || d.error_description || '';
-          
-          if (!detail) {
+
+          // Authoritatively detect the Default Payment Link error in code or detail
+          const isDefaultPaymentLinkError = 
+            code === 'transaction_default_checkout_url_not_set' ||
+            detail === 'transaction_default_checkout_url_not_set' ||
+            (typeof detail === 'string' && (
+              detail.includes('transaction_default_checkout_url_not_set') ||
+              detail.toLowerCase().includes('default payment link')
+            ));
+
+          if (isDefaultPaymentLinkError) {
+            code = 'transaction_default_checkout_url_not_set';
+            detail = 'Cannot create a transaction or open a checkout as no default payment link has been set for this account. Set in the Paddle dashboard, then try again.';
+          } else if (!detail) {
             if (typeof event.data === 'string' && event.data.trim()) {
               detail = event.data;
             } else if (typeof d === 'object' && Object.keys(d).length > 0) {
@@ -122,8 +135,11 @@ export default function PricingLandingPage() {
             }
           }
 
-          const documentation_url = event.documentation_url || errObj.documentation_url || d.documentation_url || 
-                                    event.documentationUrl || errObj.documentationUrl || d.documentationUrl || 'N/A';
+          const documentation_url = isDefaultPaymentLinkError
+            ? 'https://developer.paddle.com/v1/errors/transactions/transaction_default_checkout_url_not_set'
+            : (event.documentation_url || errObj.documentation_url || d.documentation_url || 
+               event.documentationUrl || errObj.documentationUrl || d.documentationUrl || 'N/A');
+
           const request_id = d.meta?.request_id || event.request_id || errObj.request_id || d.request_id || 
                              event.requestId || errObj.requestId || d.requestId || 'N/A';
 
@@ -134,6 +150,7 @@ export default function PricingLandingPage() {
             detail: String(detail),
             documentation_url,
             request_id,
+            isDefaultPaymentLinkError,
             raw: event.data !== undefined ? event.data : event
           };
         };
@@ -149,13 +166,11 @@ export default function PricingLandingPage() {
               window.__lastPaddleRawEvent = event;
             }
 
-            if (isMounted) {
-              setLastPaddleEvent({
-                name: eventName,
-                data: event.data,
-                time: new Date().toLocaleTimeString()
-              });
-            }
+            setLastPaddleEvent({
+              name: eventName,
+              data: event.data,
+              time: new Date().toLocaleTimeString()
+            });
 
             // Handler 1: checkout.completed
             if (eventName === 'checkout.completed') {
@@ -181,10 +196,8 @@ export default function PricingLandingPage() {
                 'request_id': extracted.request_id,
                 'raw_event': event
               });
-              if (isMounted) {
-                setLastPaddleError(extracted);
-                setPricingNotice(`Paddle Checkout Error [${extracted.code}]: ${extracted.detail}`);
-              }
+              setLastPaddleError(extracted);
+              setPricingNotice(`Paddle Checkout Error [${extracted.code}]: ${extracted.detail}`);
             }
 
             // Handler 3: checkout.warning (Separate explicit handler)
@@ -202,9 +215,7 @@ export default function PricingLandingPage() {
                 'request_id': extracted.request_id,
                 'raw_event': event
               });
-              if (isMounted) {
-                setLastPaddleWarning(extracted);
-              }
+              setLastPaddleWarning(extracted);
             }
 
             // Handler 4: checkout.payment.error (Separate explicit handler)
@@ -222,10 +233,8 @@ export default function PricingLandingPage() {
                 'request_id': extracted.request_id,
                 'raw_event': event
               });
-              if (isMounted) {
-                setLastPaddleError(extracted);
-                setPricingNotice(`Paddle Payment Error [${extracted.code}]: ${extracted.detail}`);
-              }
+              setLastPaddleError(extracted);
+              setPricingNotice(`Paddle Payment Error [${extracted.code}]: ${extracted.detail}`);
             }
 
             // Handler 5: checkout.loaded
@@ -844,7 +853,8 @@ export default function PricingLandingPage() {
               </p>
 
               {/* Special Action Guide for Default Payment Link */}
-              {(lastPaddleError?.code === 'transaction_default_checkout_url_not_set' ||
+              {(lastPaddleError?.isDefaultPaymentLinkError ||
+                lastPaddleError?.code === 'transaction_default_checkout_url_not_set' ||
                 (lastPaddleError?.detail && lastPaddleError.detail.includes('default payment link'))) && (
                 <div style={styles.dashboardActionBox}>
                   <div style={{ fontWeight: 700, color: '#fbbf24', marginBottom: '6px', fontSize: '13px' }}>
