@@ -38,11 +38,12 @@ export async function POST(request) {
       );
     }
 
-    const { licenseKey: rawKey, installationId } = body || {};
+    const { licenseKey: rawKey, deviceId: rawDeviceId, installationId } = body || {};
+    const deviceId = (rawDeviceId || installationId || '').trim();
 
-    if (!rawKey || !installationId) {
+    if (!rawKey || !deviceId) {
       return jsonResponse(
-        { success: false, code: 'INVALID_REQUEST', message: 'licenseKey and installationId are required.' },
+        { success: false, code: 'INVALID_REQUEST', message: 'licenseKey and deviceId are required.' },
         400,
         request
       );
@@ -97,14 +98,17 @@ export async function POST(request) {
     }
 
     // 6. Verify installation is registered as an active activation
-    const { data: activation, error: actErr } = await db
+    const { data: activations } = await db
       .from('activations')
       .select('*')
-      .eq('license_id', license.id)
-      .eq('installation_id', installationId)
-      .single();
+      .eq('license_id', license.id);
 
-    if (actErr || !activation || activation.status !== 'active') {
+    const activeList = (activations || []).filter((a) => a.status === 'active');
+    const activation = activeList.find(
+      (a) => a.device_id === deviceId || a.installation_id === deviceId
+    );
+
+    if (!activation) {
       return jsonResponse(
         {
           success: false,
@@ -116,11 +120,18 @@ export async function POST(request) {
       );
     }
 
-    // 7. Update last_seen_at
-    await db
-      .from('activations')
-      .update({ last_seen_at: now.toISOString() })
-      .eq('id', activation.id);
+    // 7. Update last_seen_at & last_validated_at
+    try {
+      await db
+        .from('activations')
+        .update({ last_seen_at: now.toISOString() })
+        .eq('id', activation.id);
+
+      await db
+        .from('licenses')
+        .update({ last_validated_at: now.toISOString() })
+        .eq('id', license.id);
+    } catch {}
 
     return jsonResponse(
       {

@@ -3,29 +3,36 @@
  * Routes:
  *   GET  /api/admin/licenses - List and search licenses
  *   POST /api/admin/licenses - Generate new license key
+ *   DELETE /api/admin/licenses - Bulk delete / clean keys
  *
- * Strictly protected by x-admin-key header.
+ * Strictly protected by server-side administrator authorization.
  */
 
 import { getDb } from '../../../../lib/supabase.js';
 import { generateLicenseKey } from '../../../../lib/license-generator.js';
-import { verifyAdminAuth } from '../../../../lib/admin-auth.js';
+import { verifyAdminRequest } from '../../../../lib/admin-auth.js';
 import { handleOptions, jsonResponse } from '../../../../lib/cors.js';
 
 export async function OPTIONS(request) {
   return handleOptions(request);
 }
 
-// GET: List licenses with search & device counts
+// GET: List licenses with search, plan filter, status filter & device counts
 export async function GET(request) {
-  if (!verifyAdminAuth(request)) {
-    return jsonResponse({ success: false, error: 'Unauthorized: Invalid admin key.' }, 401, request);
+  const auth = verifyAdminRequest(request);
+  if (!auth.authorized) {
+    return jsonResponse(
+      { success: false, error: auth.error || 'Unauthorized: Invalid admin credentials.' },
+      auth.status || 401,
+      request
+    );
   }
 
   try {
     const { searchParams } = new URL(request.url);
-    const search = searchParams.get('q') || '';
-    const status = searchParams.get('status') || '';
+    const search = (searchParams.get('q') || '').trim().toLowerCase();
+    const status = (searchParams.get('status') || '').trim();
+    const plan = (searchParams.get('plan') || '').trim();
 
     const db = getDb();
     let query = db.from('licenses').select('*').order('created_at', { ascending: false });
@@ -33,8 +40,8 @@ export async function GET(request) {
     if (status) {
       query = query.eq('status', status);
     }
-    if (search) {
-      query = query.ilike('license_key', `%${search}%`);
+    if (plan) {
+      query = query.eq('plan', plan);
     }
 
     const { data: licenses, error: licErr } = await query;
@@ -46,28 +53,62 @@ export async function GET(request) {
     const { data: activations } = await db.from('activations').select('*');
     const allActivations = activations || [];
 
-    const decorated = (licenses || []).map((lic) => {
+    // Fetch customers to join email if present
+    const { data: customers } = await db.from('customers').select('*');
+    const customerMap = new Map();
+    for (const c of customers || []) {
+      if (c.trial_license_id) customerMap.set(c.trial_license_id, c.email);
+      if (c.license_id) customerMap.set(c.license_id, c.email);
+    }
+
+    // Also check purchases for email mapping
+    const { data: purchases } = await db.from('purchases').select('license_id, customer_email');
+    for (const p of purchases || []) {
+      if (p.license_id && p.customer_email && !customerMap.has(p.license_id)) {
+        customerMap.set(p.license_id, p.customer_email);
+      }
+    }
+
+    let decorated = (licenses || []).map((lic) => {
       const licActs = allActivations.filter((a) => a.license_id === lic.id);
       const activeActs = licActs.filter((a) => a.status === 'active');
+      const associatedEmail = lic.email || customerMap.get(lic.id) || null;
+
       return {
         ...lic,
+        email: associatedEmail,
         activeDevices: activeActs.length,
         totalActivations: licActs.length,
         activations: licActs
       };
     });
 
-    return jsonResponse({ success: true, licenses: decorated }, 200, request);
+    if (search) {
+      decorated = decorated.filter(
+        (lic) =>
+          (lic.license_key || '').toLowerCase().includes(search) ||
+          (lic.plan || '').toLowerCase().includes(search) ||
+          (lic.email || '').toLowerCase().includes(search) ||
+          (lic.notes || '').toLowerCase().includes(search)
+      );
+    }
+
+    return jsonResponse({ success: true, licenses: decorated, total: decorated.length }, 200, request);
   } catch (err) {
     console.error('[Admin GET Licenses] Error:', err);
     return jsonResponse({ success: false, error: 'Internal server error.' }, 500, request);
   }
 }
 
-// POST: Generate and store a new license
+// POST: Generate and store a new license using cryptographically secure server randomness
 export async function POST(request) {
-  if (!verifyAdminAuth(request)) {
-    return jsonResponse({ success: false, error: 'Unauthorized: Invalid admin key.' }, 401, request);
+  const auth = verifyAdminRequest(request);
+  if (!auth.authorized) {
+    return jsonResponse(
+      { success: false, error: auth.error || 'Unauthorized: Invalid admin credentials.' },
+      auth.status || 401,
+      request
+    );
   }
 
   try {
@@ -76,7 +117,8 @@ export async function POST(request) {
       plan = 'lifetime',
       customDays = null,
       maxDevices = 1,
-      customerEmail = null
+      customerEmail = null,
+      notes = null
     } = body || {};
 
     const validPlans = ['7day', '30day', '90day', 'yearly', 'lifetime'];
@@ -85,6 +127,15 @@ export async function POST(request) {
     }
 
     const devices = Math.max(1, parseInt(maxDevices, 10) || 1);
+
+    // Validate email format if provided
+    let cleanEmail = null;
+    if (customerEmail && typeof customerEmail === 'string' && customerEmail.trim()) {
+      cleanEmail = customerEmail.trim().toLowerCase();
+      if (!cleanEmail.includes('@') || cleanEmail.length < 5) {
+        return jsonResponse({ success: false, error: 'Invalid customer email address.' }, 400, request);
+      }
+    }
 
     // Calculate expiration timestamp
     let expiresAt = null;
@@ -104,6 +155,7 @@ export async function POST(request) {
       expiresAt = new Date(now.getTime() + parseInt(customDays, 10) * 24 * 3600 * 1000).toISOString();
     }
 
+    // Cryptographically secure non-sequential key in ARS-XXXX-XXXX-XXXX format
     const licenseKey = generateLicenseKey('ARS');
     const db = getDb();
 
@@ -112,23 +164,27 @@ export async function POST(request) {
       plan,
       status: 'active',
       expires_at: expiresAt,
-      max_devices: devices
+      max_devices: devices,
+      email: cleanEmail,
+      notes: notes || (cleanEmail ? `Manual generated for ${cleanEmail}` : 'Admin manual generated')
     };
 
     const { data: inserted, error: insErr } = await db.from('licenses').insert(newRecord);
     if (insErr) {
       console.error('[Admin Create License] Insert error:', insErr);
-      return jsonResponse({ success: false, error: 'Database insert failed.' }, 500, request);
+      return jsonResponse({ success: false, error: 'Database insert failed: ' + insErr.message }, 500, request);
     }
 
     const createdLicense = inserted && inserted[0] ? inserted[0] : newRecord;
 
     // Optional: map to customer if email provided
-    if (customerEmail && customerEmail.includes('@')) {
-      await db.from('customers').insert({
-        email: customerEmail.trim().toLowerCase(),
-        license_id: createdLicense.id || null
-      });
+    if (cleanEmail) {
+      try {
+        await db.from('customers').insert({
+          email: cleanEmail,
+          license_id: createdLicense.id || null
+        });
+      } catch {}
     }
 
     return jsonResponse(
@@ -138,6 +194,7 @@ export async function POST(request) {
         license: {
           ...createdLicense,
           license_key: licenseKey,
+          email: cleanEmail,
           activeDevices: 0
         }
       },
@@ -152,8 +209,13 @@ export async function POST(request) {
 
 // DELETE: Bulk delete licenses or clean test keys
 export async function DELETE(request) {
-  if (!verifyAdminAuth(request)) {
-    return jsonResponse({ success: false, error: 'Unauthorized: Invalid admin key.' }, 401, request);
+  const auth = verifyAdminRequest(request);
+  if (!auth.authorized) {
+    return jsonResponse(
+      { success: false, error: auth.error || 'Unauthorized: Invalid admin credentials.' },
+      auth.status || 401,
+      request
+    );
   }
 
   try {
@@ -233,4 +295,3 @@ export async function DELETE(request) {
     return jsonResponse({ success: false, error: err.message || 'Internal server error.' }, 500, request);
   }
 }
-

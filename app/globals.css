@@ -48,3 +48,30 @@ input, select {
   font-family: inherit;
   color: var(--text-primary);
 }
+
+@keyframes spin {
+  from { transform: rotate(0deg); }
+  to { transform: rotate(360deg); }
+}
+
+.pricing-four-grid {
+  display: grid;
+  grid-template-columns: repeat(4, 1fr);
+  gap: 22px;
+  align-items: stretch;
+}
+
+@media (max-width: 1080px) {
+  .pricing-four-grid {
+    grid-template-columns: repeat(2, 1fr);
+    gap: 20px;
+  }
+}
+
+@media (max-width: 640px) {
+  .pricing-four-grid {
+    grid-template-columns: 1fr;
+    gap: 16px;
+  }
+}
+
