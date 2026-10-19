@@ -5,9 +5,9 @@
   "type": "module",
   "description": "Production License Activation & Admin API for AutoReels Scroll",
   "scripts": {
-    "dev": "next dev -p 3500",
+    "dev": "next dev -p 3000",
     "build": "next build",
-    "start": "next start -p 3500",
+    "start": "next start -p 3000",
     "check:prod": "node scripts/verify-production-config.js",
     "lint": "next lint"
   },
