@@ -140,10 +140,12 @@ runCheck(7, 'Webhook endpoint (/api/paddle/webhook) must cryptographically verif
     return { passed: false, message: 'File app/api/paddle/webhook/route.js does not exist.' };
   }
   const content = fs.readFileSync(webhookFile, 'utf8');
-  const hasSigCheck = content.includes('verifyPaddleWebhook') && content.includes('Paddle-Signature');
+  const hasSigCheck =
+    (content.includes('webhooks.unmarshal') || content.includes('verifyPaddleWebhook')) &&
+    (content.includes('Paddle-Signature') || content.includes('paddle-signature'));
   return {
     passed: hasSigCheck,
-    message: hasSigCheck ? 'Verified HMAC-SHA256 signature verification in webhook receiver.' : 'Signature verification missing in webhook receiver.'
+    message: hasSigCheck ? 'Verified cryptographic signature verification in webhook receiver.' : 'Signature verification missing in webhook receiver.'
   };
 });
 

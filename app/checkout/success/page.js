@@ -107,8 +107,8 @@ function SuccessContent() {
         {loading ? (
           <div style={styles.loadingBox}>
             <div style={styles.spinner}></div>
-            <p style={{ marginTop: '12px', fontSize: '13px', color: 'var(--text-secondary)' }}>
-              Verifying payment confirmation with Paddle webhook...
+            <p style={{ marginTop: '12px', fontSize: '14px', color: 'var(--text-secondary)' }}>
+              Payment received. Your license is being prepared...
             </p>
           </div>
         ) : error ? (
