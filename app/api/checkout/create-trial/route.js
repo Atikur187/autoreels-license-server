@@ -8,7 +8,7 @@
 
 import { getDb } from '../../../../lib/supabase.js';
 import { generateLicenseKey } from '../../../../lib/license-generator.js';
-import { calculateExpirationDate } from '../../../../lib/paddle.js';
+import { calculateExpirationDate } from '../../../../lib/lemonsqueezy.js';
 import { handleOptions, jsonResponse } from '../../../../lib/cors.js';
 import { checkRateLimit, getClientIdentifier } from '../../../../lib/rate-limit.js';
 

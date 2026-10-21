@@ -6,6 +6,8 @@ import '../../globals.css';
 
 function SuccessContent() {
   const searchParams = useSearchParams();
+  const claimToken = searchParams.get('claim_token') || searchParams.get('token');
+  const orderId = searchParams.get('order_id') || searchParams.get('lemonsqueezy_order_id');
   const txnId = searchParams.get('_ptxn') || searchParams.get('transaction_id') || searchParams.get('txn_id');
   const keyParam = searchParams.get('key') || searchParams.get('license_key');
 
@@ -16,8 +18,8 @@ function SuccessContent() {
   const [activationTip, setActivationTip] = useState('');
 
   useEffect(() => {
+    // 1. Direct license key verification
     if (keyParam) {
-      // Authoritatively verify key with backend before displaying
       fetch(`/api/license/status?license_key=${encodeURIComponent(keyParam)}`)
         .then((res) => res.json())
         .then((data) => {
@@ -32,40 +34,79 @@ function SuccessContent() {
       return;
     }
 
-    if (!txnId) {
-      setError('No transaction ID provided in checkout return.');
-      setLoading(false);
-      return;
+    // 2. Claim Token polling (Lemon Squeezy return)
+    if (claimToken) {
+      let attempts = 0;
+      const maxAttempts = 30; // 30 * 1500ms = 45 seconds
+      const interval = setInterval(async () => {
+        attempts++;
+        try {
+          const res = await fetch(`/api/license/claim?token=${encodeURIComponent(claimToken)}`);
+          const data = await res.json();
+          if (data.success && data.ready && data.license) {
+            clearInterval(interval);
+            setLicense(data.license);
+            setLoading(false);
+          } else if (data.error && !data.ready && data.status !== 'pending') {
+            clearInterval(interval);
+            setLoading(false);
+            setError(data.error);
+          } else if (attempts >= maxAttempts) {
+            clearInterval(interval);
+            setLoading(false);
+            setError(
+              'Payment received! Your license is taking slightly longer than usual to generate. Please check your email or refresh this page.'
+            );
+          }
+        } catch (err) {
+          if (attempts >= maxAttempts) {
+            clearInterval(interval);
+            setLoading(false);
+            setError('Connection error checking license status. Please refresh.');
+          }
+        }
+      }, 1500);
+
+      return () => clearInterval(interval);
     }
 
-    // Poll /api/license/status until authoritative Paddle webhook creates license
-    let attempts = 0;
-    const maxAttempts = 20; // 20 * 1500ms = 30 seconds
-    const interval = setInterval(async () => {
-      attempts++;
-      try {
-        const res = await fetch(`/api/license/status?transaction_id=${encodeURIComponent(txnId)}`);
-        const data = await res.json();
-        if (data.success && data.ready && data.license) {
-          clearInterval(interval);
-          setLicense(data.license);
-          setLoading(false);
-        } else if (attempts >= maxAttempts) {
-          clearInterval(interval);
-          setLoading(false);
-          setError('Payment received! Webhook processing is taking slightly longer than usual. Please check your email or refresh this page in a moment.');
+    // 3. Order ID / Transaction ID polling
+    const lookupId = orderId || txnId;
+    if (lookupId) {
+      let attempts = 0;
+      const maxAttempts = 30;
+      const interval = setInterval(async () => {
+        attempts++;
+        try {
+          const queryParam = orderId ? `order_id=${encodeURIComponent(orderId)}` : `transaction_id=${encodeURIComponent(txnId)}`;
+          const res = await fetch(`/api/license/status?${queryParam}`);
+          const data = await res.json();
+          if (data.success && data.ready && data.license) {
+            clearInterval(interval);
+            setLicense(data.license);
+            setLoading(false);
+          } else if (attempts >= maxAttempts) {
+            clearInterval(interval);
+            setLoading(false);
+            setError(
+              'Payment confirmed! Webhook fulfillment is finishing up. Please check your email or refresh this page in a moment.'
+            );
+          }
+        } catch (err) {
+          if (attempts >= maxAttempts) {
+            clearInterval(interval);
+            setLoading(false);
+            setError('Connection error checking license status. Please refresh.');
+          }
         }
-      } catch (err) {
-        if (attempts >= maxAttempts) {
-          clearInterval(interval);
-          setLoading(false);
-          setError('Connection error checking license status. Please refresh.');
-        }
-      }
-    }, 1500);
+      }, 1500);
 
-    return () => clearInterval(interval);
-  }, [txnId, keyParam]);
+      return () => clearInterval(interval);
+    }
+
+    setError('No checkout reference or claim token provided in return URL.');
+    setLoading(false);
+  }, [claimToken, orderId, txnId, keyParam]);
 
   const handleCopyLicense = () => {
     if (license?.license_key) {
@@ -108,7 +149,7 @@ function SuccessContent() {
           <div style={styles.loadingBox}>
             <div style={styles.spinner}></div>
             <p style={{ marginTop: '12px', fontSize: '14px', color: 'var(--text-secondary)' }}>
-              Payment received. Your license is being prepared...
+              Payment confirmed. Your license is being generated...
             </p>
           </div>
         ) : error ? (
@@ -123,7 +164,7 @@ function SuccessContent() {
           </div>
         ) : license ? (
           <div>
-            <div style={styles.licenseLabel}>License:</div>
+            <div style={styles.licenseLabel}>License Key:</div>
             <div style={styles.keyBox}>
               <span style={styles.keyText}>{license.license_key}</span>
               <button onClick={handleCopyLicense} style={styles.copyBtn} title="Copy license">

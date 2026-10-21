@@ -3,67 +3,6 @@
 import React, { useState, useEffect, useRef } from 'react';
 import './globals.css';
 
-// Helper to authoritatively extract detailed Paddle error fields from any event structure
-function extractPaddleDetails(event) {
-  if (!event) return null;
-  const d = (event.data && typeof event.data === 'object') ? event.data : {};
-  const errObj = (d.error && typeof d.error === 'object')
-    ? d.error
-    : (Array.isArray(d.errors) && d.errors.length > 0 && typeof d.errors[0] === 'object')
-    ? d.errors[0]
-    : d;
-
-  const name = event.name || event.type || d.name || 'checkout.error';
-  const type = event.type || errObj.type || d.type || (typeof event.data === 'string' ? 'string_error' : 'error');
-  let code = event.code || errObj.code || d.code || errObj.error_code || d.error_code || 'UNKNOWN_CODE';
-  
-  let detail = event.detail || errObj.detail || d.detail || 
-               event.message || errObj.message || d.message || 
-               errObj.description || d.description || 
-               errObj.error_description || d.error_description || '';
-
-  // Authoritatively detect the Default Payment Link error in code or detail
-  const isDefaultPaymentLinkError = 
-    code === 'transaction_default_checkout_url_not_set' ||
-    detail === 'transaction_default_checkout_url_not_set' ||
-    (typeof detail === 'string' && (
-      detail.includes('transaction_default_checkout_url_not_set') ||
-      detail.toLowerCase().includes('default payment link')
-    ));
-
-  if (isDefaultPaymentLinkError) {
-    code = 'transaction_default_checkout_url_not_set';
-    detail = 'Cannot create a transaction or open a checkout as no default payment link has been set for this account. Set in the Paddle dashboard, then try again.';
-  } else if (!detail) {
-    if (typeof event.data === 'string' && event.data.trim()) {
-      detail = event.data;
-    } else if (typeof d === 'object' && Object.keys(d).length > 0) {
-      detail = JSON.stringify(d);
-    } else {
-      detail = 'No specific error detail provided by Paddle.';
-    }
-  }
-
-  const documentation_url = isDefaultPaymentLinkError
-    ? 'https://developer.paddle.com/v1/errors/transactions/transaction_default_checkout_url_not_set'
-    : (event.documentation_url || errObj.documentation_url || d.documentation_url || 
-       event.documentationUrl || errObj.documentationUrl || d.documentationUrl || 'N/A');
-
-  const request_id = d.meta?.request_id || event.request_id || errObj.request_id || d.request_id || 
-                     event.requestId || errObj.requestId || d.requestId || 'N/A';
-
-  return {
-    name,
-    type,
-    code,
-    detail: String(detail),
-    documentation_url,
-    request_id,
-    isDefaultPaymentLinkError,
-    raw: event.data !== undefined ? event.data : event
-  };
-}
-
 export default function PricingLandingPage() {
   // Simulator State
   const [activePlatform, setActivePlatform] = useState('youtube');
@@ -75,116 +14,16 @@ export default function PricingLandingPage() {
   // Pricing & Checkout State
   const [openingPlanId, setOpeningPlanId] = useState(null);
   const [pricingNotice, setPricingNotice] = useState('');
+  const [checkoutConfig, setCheckoutConfig] = useState(null);
+  const [showDiagnostics, setShowDiagnostics] = useState(false);
 
-  // Paddle.js Single-Initialization and Development Diagnostic State
-  const [paddleConfig, setPaddleConfig] = useState(null);
-  const [paddleInitStatus, setPaddleInitStatus] = useState('loading'); // 'loading' | 'initialized' | 'error'
-  const [paddleInitError, setPaddleInitError] = useState(null);
-  const [lastPaddleEvent, setLastPaddleEvent] = useState(null);
-  const [lastPaddleError, setLastPaddleError] = useState(null);
-  const [lastPaddleWarning, setLastPaddleWarning] = useState(null);
-  const [lastCheckoutRequest, setLastCheckoutRequest] = useState(null);
-  const [lastCheckoutConfigSent, setLastCheckoutConfigSent] = useState(null);
-  const [showDiagnostics, setShowDiagnostics] = useState(true);
-  const paddleInitializedRef = useRef(false);
-  const paddleInitCountRef = useRef(0);
-  const isMountedRef = useRef(true);
-
-  // Central Paddle Event Callback Handler
-  const handlePaddleEvent = (event) => {
-    if (!event) return;
-    const eventName = event.name || event.type || 'unknown';
-
-    if (typeof window !== 'undefined') {
-      window.__lastPaddleRawEvent = event;
-    }
-
-    setLastPaddleEvent({
-      name: eventName,
-      data: event.data,
-      time: new Date().toLocaleTimeString()
-    });
-
-    // Handler 1: checkout.completed
-    if (eventName === 'checkout.completed') {
-      console.log('[Paddle checkout.completed]:', event.data);
-      const txnId = event.data?.transaction_id || event.data?.id;
-      if (txnId) {
-        window.location.href = `/checkout/success?transaction_id=${encodeURIComponent(txnId)}`;
-      }
-    }
-
-    // Handler 2: checkout.error (Separate explicit handler)
-    else if (eventName === 'checkout.error') {
-      const extracted = extractPaddleDetails(event);
-      if (typeof window !== 'undefined') {
-        window.__lastPaddleError = extracted;
-      }
-      console.error('[Paddle checkout.error]:', {
-        'event.name': extracted.name,
-        'event.type': extracted.type,
-        'event.code': extracted.code,
-        'event.detail': extracted.detail,
-        'event.documentation_url': extracted.documentation_url,
-        'request_id': extracted.request_id,
-        'raw_event': event
-      });
-      setLastPaddleError(extracted);
-      setPricingNotice(`Paddle Checkout Error [${extracted.code}]: ${extracted.detail}`);
-    }
-
-    // Handler 3: checkout.warning (Separate explicit handler)
-    else if (eventName === 'checkout.warning') {
-      const extracted = extractPaddleDetails(event);
-      if (typeof window !== 'undefined') {
-        window.__lastPaddleWarning = extracted;
-      }
-      console.warn('[Paddle checkout.warning]:', {
-        'event.name': extracted.name,
-        'event.type': extracted.type,
-        'event.code': extracted.code,
-        'event.detail': extracted.detail,
-        'event.documentation_url': extracted.documentation_url,
-        'request_id': extracted.request_id,
-        'raw_event': event
-      });
-      setLastPaddleWarning(extracted);
-    }
-
-    // Handler 4: checkout.payment.error (Separate explicit handler)
-    else if (eventName === 'checkout.payment.error') {
-      const extracted = extractPaddleDetails(event);
-      if (typeof window !== 'undefined') {
-        window.__lastPaddleError = extracted;
-      }
-      console.error('[Paddle checkout.payment.error]:', {
-        'event.name': extracted.name,
-        'event.type': extracted.type,
-        'event.code': extracted.code,
-        'event.detail': extracted.detail,
-        'event.documentation_url': extracted.documentation_url,
-        'request_id': extracted.request_id,
-        'raw_event': event
-      });
-      setLastPaddleError(extracted);
-      setPricingNotice(`Paddle Payment Error [${extracted.code}]: ${extracted.detail}`);
-    }
-
-    // Handler 5: checkout.loaded
-    else if (eventName === 'checkout.loaded') {
-      console.log('[Paddle checkout.loaded]:', event.data);
-    }
-
-    // Handler 6: checkout.closed
-    else if (eventName === 'checkout.closed') {
-      console.log('[Paddle checkout.closed]:', event.data);
-    }
-
-    // Handler 7: General / other events
-    else {
-      console.log(`[Paddle Event: ${eventName}]:`, event.data);
-    }
-  };
+  // Free Trial Modal State
+  const [showTrialModal, setShowTrialModal] = useState(false);
+  const [trialEmail, setTrialEmail] = useState('');
+  const [trialLoading, setTrialLoading] = useState(false);
+  const [trialError, setTrialError] = useState('');
+  const [trialResult, setTrialResult] = useState(null);
+  const [trialCopied, setTrialCopied] = useState(false);
 
   // FAQ Accordion State
   const [expandedFaq, setExpandedFaq] = useState(0);
@@ -197,86 +36,18 @@ export default function PricingLandingPage() {
     tiktok: { name: 'TikTok Web', icon: '🎵', color: '#00f2fe', handle: '@daily_hacks • For You', sound: 'Pop Sound of 2026' }
   };
 
-  // Paddle.js Lifecycle: Strictly Single Initialization on Mount
+  // Load public checkout gateway status on mount
   useEffect(() => {
-    isMountedRef.current = true;
-
-    async function initializePaddleGateway() {
+    async function loadConfig() {
       try {
-        // 1. Fetch public configuration
         const res = await fetch('/api/checkout/config');
-        const config = await res.json();
-        if (!isMountedRef.current) return;
-        setPaddleConfig(config);
-
-        if (!config.success || !config.clientToken) {
-          setPaddleInitStatus('error');
-          setPaddleInitError('No Paddle Client Token returned by server config.');
-          return;
-        }
-
-        // 2. Wait for window.Paddle to be available (loaded via layout.js)
-        let attempts = 0;
-        while (!window.Paddle && attempts < 35) {
-          await new Promise((resolve) => setTimeout(resolve, 100));
-          attempts++;
-        }
-
-        // Dynamic fallback if layout script took longer
-        if (!window.Paddle) {
-          const script = document.createElement('script');
-          script.src = 'https://cdn.paddle.com/paddle/v2/paddle.js';
-          script.async = true;
-          document.body.appendChild(script);
-          await new Promise((resolve) => {
-            script.onload = resolve;
-            script.onerror = resolve;
-          });
-        }
-
-        if (!window.Paddle) {
-          if (!isMountedRef.current) return;
-          setPaddleInitStatus('error');
-          setPaddleInitError('Paddle.js script failed to load. Check ad-blocker or network.');
-          return;
-        }
-
-        // 3. Strictly guarantee SINGLE initialization
-        if (paddleInitializedRef.current) {
-          return;
-        }
-
-        // 4. Set environment BEFORE Paddle.Initialize()
-        if (config.environment === 'sandbox') {
-          window.Paddle.Environment.set('sandbox');
-        }
-
-        // 5. Initialize Paddle once with comprehensive eventCallback
-        window.Paddle.Initialize({
-          token: config.clientToken,
-          eventCallback: handlePaddleEvent
-        });
-
-        paddleInitializedRef.current = true;
-        paddleInitCountRef.current += 1;
-        if (isMountedRef.current) {
-          setPaddleInitStatus('initialized');
-          console.log(`[Paddle Initialized Successfully] Env: ${config.environment}, Token: ${config.diagnostics?.tokenPrefix}... (Call count: ${paddleInitCountRef.current})`);
-        }
+        const data = await res.json();
+        setCheckoutConfig(data);
       } catch (err) {
-        console.error('[Paddle Initialization Error]:', err);
-        if (isMountedRef.current) {
-          setPaddleInitStatus('error');
-          setPaddleInitError(err.message || 'Error initializing Paddle');
-        }
+        console.warn('[Checkout Config] Could not load:', err);
       }
     }
-
-    initializePaddleGateway();
-
-    return () => {
-      isMountedRef.current = false;
-    };
+    loadConfig();
   }, []);
 
   // Live video simulator ticker
@@ -300,35 +71,54 @@ export default function PricingLandingPage() {
 
   const plans = [
     {
+      id: '7day',
+      title: 'Free Trial',
+      duration: '7 Days Access',
+      priceUsd: '$0.00',
+      priceSub: 'Instant zero-risk trial • 7-day access',
+      subtitle: 'Experience full hands-free reel automation with zero commitment.',
+      features: [
+        'Full access to all 4 supported platforms',
+        'Smart HTML5 completion detection',
+        '1 active device limit',
+        'Manual-scroll protection',
+        'Instant license key delivery'
+      ],
+      isFree: true,
+      popular: false,
+      badge: 'Free Trial',
+      buttonText: 'Start 7-Day Free Trial'
+    },
+    {
       id: '30day',
-      title: '1 Month Pass',
+      title: 'Monthly Pass',
       duration: '30 Days Access',
       priceUsd: '$1.49',
-      priceSub: 'One-time payment • 30 Days Access',
+      priceSub: 'One-time payment • 30-day access',
       subtitle: 'Ultra-affordable 30-day pass for casual short-form video fans.',
       features: [
-        'Full access to all four supported platforms',
-        'Smart video-completion detection',
-        'Two-device activation limit',
+        'Full access to all 4 supported platforms',
+        'Smart HTML5 completion detection',
+        'Up to 2 active devices',
         'Configurable skip delay',
-        'Standard support'
+        'No recurring monthly subscription'
       ],
       isFree: false,
       popular: false,
       badge: '1 Month',
-      buttonText: 'Select 1 Month Pass ($1.49)'
+      buttonText: 'Select 1 Month Pass'
     },
     {
       id: 'yearly',
-      title: '1 Year Pro',
+      title: 'Yearly Pro',
       duration: '365 Days Access',
       priceUsd: '$9.49',
-      priceSub: 'One-time payment • 365 Days Access',
+      priceSub: 'One-time payment • 365-day access',
       subtitle: 'Our most popular pass — enjoy unlimited reels all year long.',
       features: [
-        'Full access to all four supported platforms',
-        'Smart video-completion detection',
-        'Three-device activation limit',
+        'Full access to all 4 supported platforms',
+        'Smart HTML5 completion detection',
+        'Up to 3 active devices',
         'Configurable skip delay',
         'Manual-scroll protection',
         'Priority updates and support'
@@ -336,29 +126,28 @@ export default function PricingLandingPage() {
       isFree: false,
       popular: true,
       badge: 'Most Popular',
-      buttonText: 'Get 1 Year Pro ($9.49)'
+      buttonText: 'Get 1 Year Pro'
     },
     {
       id: 'lifetime',
       title: 'Lifetime VIP',
-      duration: 'Never Expires',
+      duration: 'Lifetime Access',
       priceUsd: '$19.99',
-      priceSub: 'One-time payment • Never Expires',
+      priceSub: 'One-time payment • Lifetime access',
       subtitle: 'Pay once, enjoy hands-free auto-scrolling forever.',
       features: [
-        'Lifetime access',
-        'Up to five active devices',
-        'All four supported platforms',
-        'Future platform updates where available',
+        'Lifetime access — never expires',
+        'Up to 5 active devices',
+        'All 4 supported platforms',
+        'Future platform updates included',
         'Smart manual-scroll protection',
-        'VIP support, as actually provided',
-        'No recurring subscription'
+        'VIP priority support'
       ],
       isFree: false,
       popular: false,
       bestValue: true,
       badge: 'Best Value',
-      buttonText: 'Select Lifetime VIP ($19.99)'
+      buttonText: 'Select Lifetime VIP'
     }
   ];
 
@@ -373,7 +162,7 @@ export default function PricingLandingPage() {
     },
     {
       q: 'How do I receive my license key after checkout?',
-      a: 'Your license key (format: AR-XXXX-XXXX-XXXX) is generated and displayed immediately on your screen upon payment confirmation and also sent straight to your email. Simply click "Copy License", open your AutoReels Chrome extension popup, and click "Activate".'
+      a: 'Your license key (format: ARS-XXXX-XXXX-XXXX) is generated and displayed immediately on your screen upon verified payment confirmation and also sent straight to your email. Simply click "Copy License", open your AutoReels Chrome extension popup, and click "Activate".'
     },
     {
       q: 'How does the 72-Hour Offline Grace work?',
@@ -381,26 +170,28 @@ export default function PricingLandingPage() {
     },
     {
       q: 'Can I use one license key across multiple computers?',
-      a: 'Yes! Depending on your chosen plan (2 devices for 1-Month, 3 for 1-Year Pro, and up to 5 for Lifetime VIP), you can activate multiple computers concurrently. You can also deactivate an old device anytime directly inside the extension popup.'
+      a: 'Yes! Depending on your chosen plan (1 device for Free Trial, 2 for Monthly, 3 for Yearly Pro, and up to 5 for Lifetime VIP), you can activate multiple computers concurrently. You can also deactivate an old device anytime directly inside the extension popup.'
     },
     {
       q: 'What is your refund policy?',
-      a: 'We offer a 100% 30-day money-back guarantee. If you are not completely thrilled with your AutoReels experience, simply reach out to support within 30 days for a fast, hassle-free refund.'
+      a: 'We offer a 100% 30-day money-back guarantee on all passes. If you are not completely thrilled with your AutoReels experience, simply reach out to support within 30 days for a fast, hassle-free refund.'
     },
     {
       q: 'Is my payment and browsing data safe?',
-      a: '100% secure. Payments are processed by Paddle, our global Merchant of Record with bank-grade 256-bit encryption. AutoReels operates under Chrome Manifest V3 with strict privacy sandboxing: we never track, inspect, or log your personal browsing data, viewing history, or credentials.'
+      a: '100% secure. Payments are processed by Lemon Squeezy, our trusted Merchant of Record with bank-grade 256-bit encryption. AutoReels operates under Chrome Manifest V3 with strict privacy sandboxing: we never track, inspect, or log your personal browsing data, viewing history, or credentials.'
     }
   ];
 
   const handleOpenCheckout = async (plan) => {
-    // Launch official Paddle.js overlay checkout
+    if (plan.id === '7day') {
+      setShowTrialModal(true);
+      return;
+    }
+
     setOpeningPlanId(plan.id);
     setPricingNotice('');
-    setLastPaddleError(null);
 
     try {
-      // Authoritatively fetch Paddle Price ID and public client token from server
       const res = await fetch('/api/checkout/create', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
@@ -408,103 +199,50 @@ export default function PricingLandingPage() {
       });
       const data = await res.json();
 
-      if (!res.ok || !data.success) {
+      if (!res.ok || !data.success || !data.checkoutUrl) {
         setPricingNotice(data.error || 'Unable to initialize checkout. Please try again later.');
         setOpeningPlanId(null);
         return;
       }
 
-      // Check if Paddle is loaded
-      if (typeof window === 'undefined' || !window.Paddle) {
-        setPricingNotice('Payment gateway is still initializing. Please wait a moment and try again.');
-        setOpeningPlanId(null);
-        return;
-      }
-
-      // Ensure Paddle is initialized before opening checkout
-      if (!paddleInitializedRef.current) {
-        if (data.environment === 'sandbox') {
-          window.Paddle.Environment.set('sandbox');
-        }
-        window.Paddle.Initialize({
-          token: data.clientToken,
-          eventCallback: handlePaddleEvent
-        });
-        paddleInitializedRef.current = true;
-        setPaddleInitStatus('initialized');
-      }
-
-      // Safe Checkout Configuration Logging (Strictly token prefix only, NO full secret keys)
-      const tokenPrefix = data.clientToken?.startsWith('test_')
-        ? 'test_'
-        : data.clientToken?.startsWith('live_')
-        ? 'live_'
-        : 'unknown';
-
-      const pricePrefix = (data.priceId && typeof data.priceId === 'string' && data.priceId.startsWith('pri_'))
-        ? 'pri_'
-        : 'unknown';
-
-      const checkoutConfigLog = {
-        paddleEnvironment: data.environment || 'sandbox',
-        paddleInitializeSucceeded: paddleInitializedRef.current,
-        paddleInitialized: paddleInitializedRef.current,
-        clientTokenExists: Boolean(data.clientToken),
-        clientTokenPrefix: tokenPrefix, // Prefix only, never full token
-        selectedPlan: plan.id,
-        selectedPriceId: data.priceId,
-        priceIdPrefix: pricePrefix,
-        checkoutItems: [{ priceId: data.priceId, quantity: 1 }],
-        time: new Date().toLocaleTimeString()
-      };
-
-      if (typeof window !== 'undefined') {
-        window.__lastCheckoutConfigSent = checkoutConfigLog;
-      }
-
-      console.log('[Paddle Checkout Configuration Sent]:', checkoutConfigLog);
-      setLastCheckoutConfigSent(checkoutConfigLog);
-      setLastCheckoutRequest({
-        plan: plan.id,
-        priceId: data.priceId,
-        environment: data.environment,
-        time: new Date().toLocaleTimeString()
-      });
-
-      // Directly open official Paddle.js v2 overlay checkout
-      // DO NOT call Paddle.Initialize() again!
-      try {
-        window.Paddle.Checkout.open({
-          items: [{ priceId: data.priceId, quantity: 1 }],
-          settings: {
-            displayMode: 'overlay',
-            theme: 'dark',
-            locale: 'en',
-            successUrl: `${window.location.origin}/checkout/success`
-          },
-          customData: {
-            plan: plan.id
-          }
-        });
-      } catch (paddleErr) {
-        console.error('[Paddle.js Checkout.open Exception]:', paddleErr);
-        const openErr = {
-          name: 'checkout.open_exception',
-          type: paddleErr.name || 'CheckoutOpenException',
-          code: paddleErr.code || 'OPEN_EXCEPTION',
-          detail: paddleErr.message || String(paddleErr),
-          documentation_url: 'N/A',
-          request_id: 'N/A',
-          raw: paddleErr
-        };
-        setLastPaddleError(openErr);
-        setPricingNotice('Paddle Checkout failed to open: ' + (paddleErr.message || 'Check console logs.'));
-      }
+      // Authoritative server-side checkout: redirect customer to Lemon Squeezy hosted checkout
+      window.location.href = data.checkoutUrl;
     } catch (err) {
       console.error('[Checkout Connection Error]:', err);
       setPricingNotice('Connection error contacting checkout service. Please try again.');
-    } finally {
       setOpeningPlanId(null);
+    }
+  };
+
+  const handleCreateTrial = async (e) => {
+    e.preventDefault();
+    if (!trialEmail || !trialEmail.includes('@')) {
+      setTrialError('A valid email address is required to activate your 7-Day Free Trial.');
+      return;
+    }
+
+    setTrialLoading(true);
+    setTrialError('');
+
+    try {
+      const res = await fetch('/api/checkout/create-trial', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ email: trialEmail.trim() })
+      });
+      const data = await res.json();
+
+      if (!res.ok || !data.success) {
+        setTrialError(data.error || 'Failed to claim trial. Please try again or select a pass.');
+        return;
+      }
+
+      setTrialResult(data);
+    } catch (err) {
+      console.error('[Trial Claim Error]:', err);
+      setTrialError('Connection error contacting trial activation service. Please retry.');
+    } finally {
+      setTrialLoading(false);
     }
   };
 
@@ -829,33 +567,23 @@ export default function PricingLandingPage() {
           </p>
         </div>
 
-        {/* Real Paddle Checkout Diagnostic / Error Banner */}
-        {(pricingNotice || lastPaddleError) && (
-          <div style={styles.checkoutErrorBanner} id="paddle-diagnostic-alert">
+        {/* Checkout Diagnostic / Notice Banner */}
+        {pricingNotice && (
+          <div style={styles.checkoutErrorBanner} id="checkout-notice-alert">
             <div style={styles.checkoutErrorHeader}>
               <div style={{ display: 'flex', alignItems: 'center', gap: '10px' }}>
                 <span style={{ fontSize: '20px' }}>⚠️</span>
                 <div>
                   <div style={{ fontWeight: 700, fontSize: '15px', color: '#f87171' }}>
-                    {lastPaddleError?.code && lastPaddleError.code !== 'UNKNOWN_CODE'
-                      ? `Paddle Error: ${lastPaddleError.code}`
-                      : 'Paddle Checkout Notice'}
+                    Checkout Notice
                   </div>
                   <div style={{ fontSize: '12px', color: '#94a3b8' }}>
-                    Event: <code style={styles.codeTag}>{lastPaddleError?.name || 'checkout.error'}</code>
-                    {lastPaddleError?.request_id && lastPaddleError.request_id !== 'N/A' && (
-                      <span style={{ marginLeft: '8px' }}>
-                        Request ID: <code style={styles.codeTag}>{lastPaddleError.request_id}</code>
-                      </span>
-                    )}
+                    Official Lemon Squeezy Hosted Payment Gateway
                   </div>
                 </div>
               </div>
               <button
-                onClick={() => {
-                  setPricingNotice('');
-                  setLastPaddleError(null);
-                }}
+                onClick={() => setPricingNotice('')}
                 style={styles.alertDismissBtn}
                 title="Dismiss"
               >
@@ -864,67 +592,24 @@ export default function PricingLandingPage() {
             </div>
 
             <div style={styles.checkoutErrorBody}>
-              <p style={{ margin: '0 0 10px 0', fontSize: '13px', lineHeight: 1.5, color: '#fca5a5' }}>
-                {lastPaddleError?.detail || pricingNotice}
+              <p style={{ margin: 0, fontSize: '13px', lineHeight: 1.5, color: '#fca5a5' }}>
+                {pricingNotice}
               </p>
-
-              {/* Special Action Guide for Default Payment Link */}
-              {(lastPaddleError?.isDefaultPaymentLinkError ||
-                lastPaddleError?.code === 'transaction_default_checkout_url_not_set' ||
-                (lastPaddleError?.detail && lastPaddleError.detail.includes('default payment link'))) && (
-                <div style={styles.dashboardActionBox}>
-                  <div style={{ fontWeight: 700, color: '#fbbf24', marginBottom: '6px', fontSize: '13px' }}>
-                    🛠️ Immediate Action Required in Paddle Dashboard:
-                  </div>
-                  <ol style={{ margin: 0, paddingLeft: '18px', fontSize: '12px', color: '#e2e8f0', lineHeight: 1.6 }}>
-                    <li>
-                      Open your{' '}
-                      <a
-                        href="https://sandbox-vendors.paddle.com/checkout-settings"
-                        target="_blank"
-                        rel="noopener noreferrer"
-                        style={{ color: '#38bdf8', textDecoration: 'underline' }}
-                      >
-                        Paddle Sandbox Dashboard → Checkout Settings
-                      </a>
-                    </li>
-                    <li>Find the <strong>Default payment link</strong> setting.</li>
-                    <li>
-                      Enter your live pricing URL:{' '}
-                      <code style={{ ...styles.codeTag, color: '#38bdf8', background: 'rgba(0,0,0,0.4)' }}>
-                        https://autoreels-license-server.vercel.app/pricing
-                      </code>
-                    </li>
-                    <li>Click <strong>Save</strong> in Paddle Dashboard, then refresh this page and click your plan button again.</li>
-                  </ol>
-                </div>
-              )}
-
-              {lastPaddleError?.documentation_url && lastPaddleError.documentation_url !== 'N/A' && (
-                <div style={{ marginTop: '10px', fontSize: '12px' }}>
-                  📖 Paddle Docs Reference:{' '}
-                  <a
-                    href={lastPaddleError.documentation_url}
-                    target="_blank"
-                    rel="noopener noreferrer"
-                    style={{ color: '#38bdf8', textDecoration: 'underline' }}
-                  >
-                    {lastPaddleError.documentation_url}
-                  </a>
-                </div>
-              )}
             </div>
           </div>
         )}
 
-        <div className="pricing-three-grid">
+        <div className="pricing-four-grid">
           {plans.map((p) => {
+            const isFree = p.id === '7day';
             const isYearly = p.id === 'yearly';
             const isLifetime = p.id === 'lifetime';
 
             let cardBorder = '1px solid var(--border)';
             let cardShadow = 'none';
-            if (isYearly) {
+            if (isFree) {
+              cardBorder = '1px solid rgba(16, 185, 129, 0.4)';
+            } else if (isYearly) {
               cardBorder = '2px solid var(--accent)';
               cardShadow = '0 12px 36px rgba(56, 189, 248, 0.25)';
             } else if (isLifetime) {
@@ -934,7 +619,10 @@ export default function PricingLandingPage() {
 
             let badgeBg = 'rgba(255, 255, 255, 0.08)';
             let badgeColor = 'var(--text-secondary)';
-            if (isYearly) {
+            if (isFree) {
+              badgeBg = 'rgba(16, 185, 129, 0.15)';
+              badgeColor = 'var(--success)';
+            } else if (isYearly) {
               badgeBg = 'var(--accent)';
               badgeColor = '#070b14';
             } else if (isLifetime) {
@@ -946,7 +634,11 @@ export default function PricingLandingPage() {
             let btnColor = 'var(--text-primary)';
             let btnBorder = '1px solid var(--border)';
 
-            if (isYearly) {
+            if (isFree) {
+              btnBg = 'rgba(16, 185, 129, 0.12)';
+              btnColor = '#10b981';
+              btnBorder = '1px solid rgba(16, 185, 129, 0.4)';
+            } else if (isYearly) {
               btnBg = 'linear-gradient(135deg, #00f2fe 0%, #4facfe 100%)';
               btnColor = '#070b14';
               btnBorder = 'none';
@@ -993,7 +685,7 @@ export default function PricingLandingPage() {
                 <ul style={styles.featureList}>
                   {p.features.map((f, i) => (
                     <li key={i} style={styles.featureItem}>
-                      <span style={{ color: 'var(--accent)', fontWeight: 'bold' }}>✓</span>
+                      <span style={{ color: isFree ? '#10b981' : 'var(--accent)', fontWeight: 'bold' }}>✓</span>
                       <span>{f}</span>
                     </li>
                   ))}
@@ -1012,23 +704,23 @@ export default function PricingLandingPage() {
                     cursor: openingPlanId === p.id ? 'wait' : 'pointer'
                   }}
                 >
-                  {openingPlanId === p.id ? 'Opening Paddle Checkout...' : p.buttonText}
+                  {openingPlanId === p.id ? 'Connecting Lemon Squeezy...' : p.buttonText}
                 </button>
               </div>
             );
           })}
         </div>
 
-        {/* Paddle Integration Diagnostics Bar */}
+        {/* Lemon Squeezy Integration Diagnostics Bar */}
         <div style={styles.diagnosticsContainer}>
           <div
             style={styles.diagnosticsToggleHeader}
             onClick={() => setShowDiagnostics(!showDiagnostics)}
           >
             <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
-              <span style={{ fontSize: '14px' }}>⚙️</span>
+              <span style={{ fontSize: '14px' }}>🍋</span>
               <span style={{ fontSize: '12px', fontWeight: 600, color: 'var(--text-secondary)' }}>
-                Integration Diagnostics ({paddleInitStatus === 'initialized' ? 'Paddle.js Ready' : paddleInitStatus})
+                Integration Status (Lemon Squeezy {checkoutConfig?.mode ? checkoutConfig.mode.toUpperCase() : 'TEST'} Mode)
               </span>
               <span
                 style={{
@@ -1036,12 +728,12 @@ export default function PricingLandingPage() {
                   width: '8px',
                   height: '8px',
                   borderRadius: '50%',
-                  backgroundColor: paddleInitStatus === 'initialized' ? '#10b981' : '#f59e0b'
+                  backgroundColor: checkoutConfig?.success ? '#10b981' : '#f59e0b'
                 }}
               ></span>
             </div>
             <span style={{ fontSize: '12px', color: 'var(--accent)' }}>
-              {showDiagnostics ? 'Hide Diagnostics ▲' : 'Show Diagnostics ▼'}
+              {showDiagnostics ? 'Hide Details ▲' : 'Show Details ▼'}
             </span>
           </div>
 
@@ -1049,39 +741,37 @@ export default function PricingLandingPage() {
             <div style={styles.diagnosticsContent}>
               <div style={styles.diagGrid}>
                 <div style={styles.diagItem}>
-                  <div style={styles.diagLabel}>Paddle Environment</div>
+                  <div style={styles.diagLabel}>Payment Provider</div>
+                  <div style={styles.diagValue}>Lemon Squeezy Hosted Checkout</div>
+                </div>
+                <div style={styles.diagItem}>
+                  <div style={styles.diagLabel}>Active Mode</div>
                   <div style={styles.diagValue}>
-                    {paddleConfig?.environment || 'sandbox'} {paddleConfig?.isProduction ? '(Live)' : '(Sandbox)'}
+                    {checkoutConfig?.mode === 'live' ? 'Live Mode (Production)' : 'Test Mode (Sandbox)'}
                   </div>
                 </div>
                 <div style={styles.diagItem}>
-                  <div style={styles.diagLabel}>Client Token (Prefix)</div>
+                  <div style={styles.diagLabel}>Store ID</div>
                   <div style={styles.diagValue}>
-                    <code>{paddleConfig?.diagnostics?.tokenPrefix || 'test_'} (Masked: {paddleConfig?.diagnostics?.maskedToken || 'N/A'})</code>
+                    <code>{checkoutConfig?.storeId || 'Configured via LEMON_SQUEEZY_STORE_ID'}</code>
                   </div>
                 </div>
                 <div style={styles.diagItem}>
-                  <div style={styles.diagLabel}>1 Month Pass ($1.49)</div>
+                  <div style={styles.diagLabel}>Monthly Variant ($1.49)</div>
                   <div style={styles.diagValue}>
-                    <code>{paddleConfig?.diagnostics?.prices?.['30day']?.id || 'pri_01m2b6436f3ss2z4a2zphtx2r2'}</code>
+                    <code>{checkoutConfig?.variants?.['30day'] || 'LEMON_SQUEEZY_VARIANT_MONTHLY'}</code>
                   </div>
                 </div>
                 <div style={styles.diagItem}>
-                  <div style={styles.diagLabel}>1 Year Pro ($9.49)</div>
+                  <div style={styles.diagLabel}>Yearly Pro Variant ($9.49)</div>
                   <div style={styles.diagValue}>
-                    <code>{paddleConfig?.diagnostics?.prices?.['yearly']?.id || 'pri_01m2b649m3xr3rey1zepakqza8'}</code>
+                    <code>{checkoutConfig?.variants?.['yearly'] || 'LEMON_SQUEEZY_VARIANT_YEARLY'}</code>
                   </div>
                 </div>
                 <div style={styles.diagItem}>
-                  <div style={styles.diagLabel}>Lifetime VIP ($19.99)</div>
+                  <div style={styles.diagLabel}>Lifetime VIP Variant ($19.99)</div>
                   <div style={styles.diagValue}>
-                    <code>{paddleConfig?.diagnostics?.prices?.['lifetime']?.id || 'pri_01m2b649zy4hemgsgazma491fj'}</code>
-                  </div>
-                </div>
-                <div style={styles.diagItem}>
-                  <div style={styles.diagLabel}>Last Paddle Event</div>
-                  <div style={styles.diagValue}>
-                    {lastPaddleEvent ? `${lastPaddleEvent.name} at ${lastPaddleEvent.time}` : 'None yet'}
+                    <code>{checkoutConfig?.variants?.['lifetime'] || 'LEMON_SQUEEZY_VARIANT_LIFETIME'}</code>
                   </div>
                 </div>
               </div>
@@ -1163,7 +853,7 @@ export default function PricingLandingPage() {
               © 2026 AutoReels Scroll. High-performance social video automation for Chrome.
             </div>
             <div style={{ fontSize: '11px', color: '#64748b', marginTop: '6px', maxWidth: '480px' }}>
-              🔒 Payments securely processed by Paddle, our Merchant of Record. 256-bit SSL encrypted. Includes 30-day money-back guarantee.
+              🔒 Payments securely processed by Lemon Squeezy, our Merchant of Record. 256-bit SSL encrypted. Includes 30-day money-back guarantee.
             </div>
           </div>
           <div style={styles.footerLinks}>
@@ -1176,6 +866,120 @@ export default function PricingLandingPage() {
         </div>
       </footer>
 
+      {/* Free Trial Modal */}
+      {showTrialModal && (
+        <div style={styles.modalOverlay}>
+          <div style={styles.modalCard}>
+            <div style={styles.modalHeader}>
+              <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
+                <span style={{ fontSize: '24px' }}>⚡</span>
+                <span style={{ fontSize: '18px', fontWeight: 800, color: '#fff' }}>
+                  {trialResult ? 'Your 7-Day Trial Is Ready!' : 'Start 7-Day Free Trial'}
+                </span>
+              </div>
+              <button
+                onClick={() => {
+                  setShowTrialModal(false);
+                  setTrialError('');
+                  setTrialResult(null);
+                  setTrialEmail('');
+                }}
+                style={styles.modalCloseBtn}
+              >
+                ✕
+              </button>
+            </div>
+
+            {!trialResult ? (
+              <form onSubmit={handleCreateTrial} style={{ marginTop: '16px' }}>
+                <p style={{ fontSize: '14px', color: 'var(--text-secondary)', lineHeight: 1.6, margin: '0 0 16px' }}>
+                  Enjoy instant, unlimited hands-free scrolling on YouTube Shorts, Instagram Reels, Facebook Reels, and TikTok Web for 7 full days. No credit card required.
+                </p>
+
+                <div style={{ marginBottom: '16px' }}>
+                  <label style={{ display: 'block', fontSize: '12px', fontWeight: 600, color: 'var(--text-secondary)', marginBottom: '6px' }}>
+                    Your Email Address (for key delivery & activation)
+                  </label>
+                  <input
+                    type="email"
+                    required
+                    placeholder="you@example.com"
+                    value={trialEmail}
+                    onChange={(e) => setTrialEmail(e.target.value)}
+                    style={styles.modalInput}
+                    autoFocus
+                  />
+                  <div style={{ fontSize: '11px', color: 'var(--text-dim)', marginTop: '4px' }}>
+                    1 free trial per email address. We never spam.
+                  </div>
+                </div>
+
+                {trialError && (
+                  <div style={styles.modalErrorBox}>
+                    <span>⚠️ {trialError}</span>
+                  </div>
+                )}
+
+                <button
+                  type="submit"
+                  disabled={trialLoading}
+                  style={styles.modalPrimaryBtn}
+                >
+                  {trialLoading ? 'Generating 7-Day License...' : 'Claim Free Trial License Key →'}
+                </button>
+              </form>
+            ) : (
+              <div style={{ marginTop: '16px' }}>
+                <div style={styles.modalSuccessBanner}>
+                  🎉 Payment Confirmed ($0.00) • 7-Day Full Access
+                </div>
+
+                <div style={{ margin: '16px 0' }}>
+                  <div style={{ fontSize: '12px', color: 'var(--text-secondary)', marginBottom: '6px' }}>
+                    Your ARS Free Trial License Key:
+                  </div>
+                  <div style={styles.modalKeyBox}>
+                    {trialResult.licenseKey}
+                  </div>
+                </div>
+
+                <button
+                  onClick={() => {
+                    navigator.clipboard.writeText(trialResult.licenseKey);
+                    setTrialCopied(true);
+                    setTimeout(() => setTrialCopied(false), 2500);
+                  }}
+                  style={styles.modalCopyBtn}
+                >
+                  {trialCopied ? '✔ Copied to Clipboard!' : '📋 Copy License Key'}
+                </button>
+
+                <div style={styles.modalGuideBox}>
+                  <div style={{ fontWeight: 700, color: '#38bdf8', marginBottom: '6px', fontSize: '13px' }}>
+                    How to Activate AutoReels in Chrome:
+                  </div>
+                  <ol style={{ margin: 0, paddingLeft: '18px', fontSize: '12px', color: '#e2e8f0', lineHeight: 1.6 }}>
+                    <li>Click the AutoReels puzzle icon in your Chrome toolbar.</li>
+                    <li>Paste your key <code>{trialResult.licenseKey}</code> into the License Key box.</li>
+                    <li>Click <strong>Activate License</strong>. Your 7-day access starts immediately!</li>
+                  </ol>
+                </div>
+
+                <button
+                  onClick={() => {
+                    setShowTrialModal(false);
+                    setTrialResult(null);
+                    setTrialEmail('');
+                  }}
+                  style={styles.modalDoneBtn}
+                >
+                  Done
+                </button>
+              </div>
+            )}
+          </div>
+        </div>
+      )}
     </div>
   );
 }
@@ -2061,5 +1865,129 @@ const styles = {
     fontSize: '12px',
     color: 'var(--text-primary)',
     wordBreak: 'break-all'
+  },
+  modalOverlay: {
+    position: 'fixed',
+    top: 0,
+    left: 0,
+    right: 0,
+    bottom: 0,
+    backgroundColor: 'rgba(0, 0, 0, 0.75)',
+    backdropFilter: 'blur(8px)',
+    display: 'flex',
+    alignItems: 'center',
+    justifyContent: 'center',
+    padding: '20px',
+    zIndex: 9999
+  },
+  modalCard: {
+    backgroundColor: '#0d1527',
+    border: '1px solid rgba(56, 189, 248, 0.3)',
+    borderRadius: '16px',
+    maxWidth: '480px',
+    width: '100%',
+    padding: '24px',
+    boxShadow: '0 24px 60px rgba(0, 0, 0, 0.7)',
+    position: 'relative'
+  },
+  modalHeader: {
+    display: 'flex',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+    paddingBottom: '12px',
+    borderBottom: '1px solid rgba(255, 255, 255, 0.08)'
+  },
+  modalCloseBtn: {
+    background: 'none',
+    border: 'none',
+    color: '#94a3b8',
+    fontSize: '20px',
+    cursor: 'pointer',
+    padding: '4px 8px'
+  },
+  modalInput: {
+    width: '100%',
+    padding: '12px 14px',
+    borderRadius: '8px',
+    border: '1px solid rgba(255, 255, 255, 0.15)',
+    backgroundColor: 'rgba(0, 0, 0, 0.35)',
+    color: '#fff',
+    fontSize: '14px',
+    outline: 'none',
+    boxSizing: 'border-box'
+  },
+  modalErrorBox: {
+    backgroundColor: 'rgba(239, 68, 68, 0.12)',
+    border: '1px solid rgba(239, 68, 68, 0.3)',
+    borderRadius: '8px',
+    padding: '10px 14px',
+    color: '#f87171',
+    fontSize: '13px',
+    marginBottom: '14px'
+  },
+  modalPrimaryBtn: {
+    width: '100%',
+    padding: '14px',
+    borderRadius: '8px',
+    background: 'linear-gradient(135deg, #00f2fe 0%, #4facfe 100%)',
+    color: '#070b14',
+    fontWeight: 700,
+    fontSize: '14px',
+    cursor: 'pointer',
+    border: 'none',
+    boxShadow: '0 4px 14px rgba(0, 242, 254, 0.3)'
+  },
+  modalSuccessBanner: {
+    backgroundColor: 'rgba(16, 185, 129, 0.12)',
+    border: '1px solid rgba(16, 185, 129, 0.3)',
+    color: '#10b981',
+    padding: '10px 14px',
+    borderRadius: '8px',
+    fontSize: '13px',
+    fontWeight: 600,
+    textAlign: 'center'
+  },
+  modalKeyBox: {
+    backgroundColor: 'rgba(0, 0, 0, 0.45)',
+    border: '1px solid rgba(56, 189, 248, 0.35)',
+    borderRadius: '8px',
+    padding: '14px',
+    fontFamily: "'JetBrains Mono', monospace",
+    fontSize: '17px',
+    color: '#38bdf8',
+    letterSpacing: '1px',
+    textAlign: 'center',
+    fontWeight: 700,
+    userSelect: 'all'
+  },
+  modalCopyBtn: {
+    width: '100%',
+    padding: '12px',
+    borderRadius: '8px',
+    backgroundColor: 'rgba(56, 189, 248, 0.12)',
+    border: '1px solid rgba(56, 189, 248, 0.3)',
+    color: '#38bdf8',
+    fontWeight: 700,
+    fontSize: '13px',
+    cursor: 'pointer',
+    marginBottom: '16px'
+  },
+  modalGuideBox: {
+    backgroundColor: 'rgba(0, 0, 0, 0.25)',
+    border: '1px solid rgba(255, 255, 255, 0.08)',
+    borderRadius: '8px',
+    padding: '14px 16px',
+    marginBottom: '16px'
+  },
+  modalDoneBtn: {
+    width: '100%',
+    padding: '12px',
+    borderRadius: '8px',
+    backgroundColor: 'rgba(255, 255, 255, 0.08)',
+    border: '1px solid rgba(255, 255, 255, 0.15)',
+    color: '#fff',
+    fontWeight: 600,
+    fontSize: '13px',
+    cursor: 'pointer'
   }
 };

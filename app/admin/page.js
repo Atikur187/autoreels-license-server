@@ -59,6 +59,11 @@ export default function AdminDashboardPage() {
   const [products, setProducts] = useState([]);
   const [productsLoading, setProductsLoading] = useState(false);
 
+  // Webhooks & Events Data
+  const [webhooks, setWebhooks] = useState([]);
+  const [webhooksLoading, setWebhooksLoading] = useState(false);
+  const [webhookStatusFilter, setWebhookStatusFilter] = useState('');
+
   // Active Modal for License Details & Device Slots
   const [inspectLicense, setInspectLicense] = useState(null);
 
@@ -112,8 +117,10 @@ export default function AdminDashboardPage() {
       fetchActivations();
     } else if (activeTab === 'products') {
       fetchProducts();
+    } else if (activeTab === 'webhooks') {
+      fetchWebhooks();
     }
-  }, [isAuthenticated, activeTab]);
+  }, [isAuthenticated, activeTab, webhookStatusFilter]);
 
   const showToast = (message, type = 'success') => {
     setNotification({ message, type });
@@ -442,6 +449,28 @@ export default function AdminDashboardPage() {
     }
   };
 
+  // ---------------------------------------------------------------------------
+  // Webhooks Audit Handlers
+  // ---------------------------------------------------------------------------
+  const fetchWebhooks = async () => {
+    setWebhooksLoading(true);
+    try {
+      const url = webhookStatusFilter ? `/api/admin/webhooks?status=${webhookStatusFilter}` : '/api/admin/webhooks';
+      const res = await fetch(url, { headers: getAuthHeaders() });
+      const data = await res.json();
+      if (res.ok && data.success) {
+        setWebhooks(data.events || []);
+      } else {
+        showToast(data.error || 'Failed to load webhook logs', 'error');
+      }
+    } catch (err) {
+      console.error('Error fetching webhooks:', err);
+      showToast('Error connecting to webhooks audit API', 'error');
+    } finally {
+      setWebhooksLoading(false);
+    }
+  };
+
   const copyText = (txt) => {
     navigator.clipboard.writeText(txt);
     setCopiedKey(true);
@@ -627,6 +656,12 @@ export default function AdminDashboardPage() {
           style={{ ...styles.tabButton, ...(activeTab === 'products' ? styles.tabButtonActive : {}) }}
         >
           📦 Products & Plans
+        </button>
+        <button
+          onClick={() => setActiveTab('webhooks')}
+          style={{ ...styles.tabButton, ...(activeTab === 'webhooks' ? styles.tabButtonActive : {}) }}
+        >
+          ⚡ Webhook Events
         </button>
         <button
           onClick={() => setActiveTab('settings')}
@@ -1321,14 +1356,145 @@ export default function AdminDashboardPage() {
         )}
 
         {/* =================================================================== */}
-        {/* TAB 6: SETTINGS */}
+        {/* TAB 6: WEBHOOKS & FAILURE AUDIT */}
+        {/* =================================================================== */}
+        {activeTab === 'webhooks' && (
+          <div>
+            <div style={styles.sectionHeaderRow}>
+              <div>
+                <h2 style={styles.viewTitle}>Webhook Events & Processing Failures</h2>
+                <p style={styles.viewSubtitle}>
+                  Real-time idempotency logs and Lemon Squeezy event auditing for automated license issuance.
+                </p>
+              </div>
+
+              <div style={{ display: 'flex', gap: '10px', alignItems: 'center' }}>
+                <select
+                  value={webhookStatusFilter}
+                  onChange={(e) => setWebhookStatusFilter(e.target.value)}
+                  style={styles.selectFilter}
+                >
+                  <option value="">All Statuses</option>
+                  <option value="completed">Completed / Processed</option>
+                  <option value="failed">Failed / Errors</option>
+                  <option value="ignored">Ignored</option>
+                </select>
+
+                <button
+                  onClick={fetchWebhooks}
+                  disabled={webhooksLoading}
+                  style={styles.actionBtnSecondary}
+                >
+                  {webhooksLoading ? 'Refreshing...' : '🔄 Refresh Logs'}
+                </button>
+              </div>
+            </div>
+
+            <div style={styles.tableCard}>
+              <table style={styles.table}>
+                <thead>
+                  <tr>
+                    <th style={styles.th}>Received At</th>
+                    <th style={styles.th}>Event ID</th>
+                    <th style={styles.th}>Event Type</th>
+                    <th style={styles.th}>Status</th>
+                    <th style={styles.th}>Order / Details</th>
+                    <th style={styles.th}>Failure Reason</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {webhooksLoading ? (
+                    <tr>
+                      <td colSpan={6} style={{ textAlign: 'center', padding: '36px', color: 'var(--text-secondary)' }}>
+                        <div style={styles.spinner}></div>
+                        <p style={{ marginTop: '10px' }}>Loading webhook event audit...</p>
+                      </td>
+                    </tr>
+                  ) : webhooks.length === 0 ? (
+                    <tr>
+                      <td colSpan={6} style={{ textAlign: 'center', padding: '36px', color: 'var(--text-secondary)' }}>
+                        No webhook events recorded yet. When Lemon Squeezy sends order events to <code>/api/lemonsqueezy/webhook</code>, they appear here.
+                      </td>
+                    </tr>
+                  ) : (
+                    webhooks.map((evt) => {
+                      const isSuccess = evt.status === 'completed' || evt.status === 'processed';
+                      const isFailed = evt.status === 'failed' || evt.status === 'error';
+                      return (
+                        <tr key={evt.id || evt.eventId} style={styles.tr}>
+                          <td style={styles.td}>
+                            {evt.receivedAt ? new Date(evt.receivedAt).toLocaleString() : 'N/A'}
+                          </td>
+                          <td style={styles.td}>
+                            <code style={styles.codeSnippet}>{evt.eventId || 'N/A'}</code>
+                          </td>
+                          <td style={styles.td}>
+                            <span style={{ fontWeight: 700, color: '#38bdf8' }}>
+                              {evt.eventType || 'order_created'}
+                            </span>
+                          </td>
+                          <td style={styles.td}>
+                            <span
+                              style={{
+                                display: 'inline-block',
+                                padding: '3px 8px',
+                                borderRadius: '12px',
+                                fontSize: '11px',
+                                fontWeight: 700,
+                                textTransform: 'uppercase',
+                                backgroundColor: isSuccess
+                                  ? 'rgba(16, 185, 129, 0.15)'
+                                  : isFailed
+                                  ? 'rgba(239, 68, 68, 0.15)'
+                                  : 'rgba(255, 255, 255, 0.08)',
+                                color: isSuccess ? '#10b981' : isFailed ? '#ef4444' : '#94a3b8'
+                              }}
+                            >
+                              {evt.status}
+                            </span>
+                          </td>
+                          <td style={styles.td}>
+                            {evt.payloadSummary?.orderId ? (
+                              <div>
+                                <div>Order: <strong>#{evt.payloadSummary.orderId}</strong></div>
+                                {evt.payloadSummary.userEmail && (
+                                  <div style={{ fontSize: '11px', color: 'var(--text-dim)' }}>
+                                    {evt.payloadSummary.userEmail}
+                                  </div>
+                                )}
+                              </div>
+                            ) : (
+                              <span style={{ color: 'var(--text-dim)' }}>—</span>
+                            )}
+                          </td>
+                          <td style={styles.td}>
+                            {evt.errorMessage ? (
+                              <span style={{ color: '#ef4444', fontSize: '12px' }}>
+                                ⚠️ {evt.errorMessage}
+                              </span>
+                            ) : (
+                              <span style={{ color: 'var(--text-dim)', fontSize: '12px' }}>None (OK)</span>
+                            )}
+                          </td>
+                        </tr>
+                      );
+                    })
+                  )}
+                </tbody>
+              </table>
+            </div>
+          </div>
+        )}
+
+        {/* =================================================================== */}
+        {/* TAB 7: SETTINGS */}
         {/* =================================================================== */}
         {activeTab === 'settings' && (
           <div>
             <div style={styles.sectionHeaderRow}>
               <div>
                 <h2 style={styles.viewTitle}>Server Environment Settings</h2>
-                <p style={styles.viewSubtitle}>Configuration audit for Paddle, Supabase, and Administrator Authorization.</p>
+                <p style={styles.viewSubtitle}>Configuration audit for Lemon Squeezy, Supabase, and Administrator Authorization.</p>
               </div>
             </div>
 
@@ -1368,9 +1534,9 @@ export default function AdminDashboardPage() {
                 <div style={styles.checkItem}>
                   <span style={{ color: 'var(--success)', fontSize: '18px' }}>✔</span>
                   <div>
-                    <strong>Paddle Webhook Idempotency</strong>
+                    <strong>Lemon Squeezy Webhook Verification</strong>
                     <p style={{ margin: 0, fontSize: '12px', color: 'var(--text-secondary)' }}>
-                      HMAC-SHA256 signature checked. Re-sent webhooks cannot create duplicate purchases.
+                      HMAC-SHA256 signature checked with timing-safe comparison. Idempotency prevents duplicates.
                     </p>
                   </div>
                 </div>
@@ -1384,44 +1550,52 @@ export default function AdminDashboardPage() {
               </p>
               <div style={styles.envTable}>
                 <div style={styles.envRow}>
-                  <code style={styles.envKey}>ADMIN_API_KEY</code>
-                  <span style={styles.envDesc}>Private secret password for Master Admin login.</span>
+                  <code style={styles.envKey}>LEMON_SQUEEZY_MODE</code>
+                  <span style={styles.envDesc}>&apos;test&apos; for development, or &apos;live&apos; for production store.</span>
                 </div>
                 <div style={styles.envRow}>
-                  <code style={styles.envKey}>ADMIN_EMAILS</code>
-                  <span style={styles.envDesc}>Comma-separated list of authorized admin emails for Supabase login.</span>
+                  <code style={styles.envKey}>LEMON_SQUEEZY_API_KEY</code>
+                  <span style={styles.envDesc}>Official Lemon Squeezy API key (Starts with test_ or live_).</span>
                 </div>
                 <div style={styles.envRow}>
-                  <code style={styles.envKey}>PADDLE_ENV</code>
-                  <span style={styles.envDesc}>Set to &apos;sandbox&apos; for testing, or &apos;production&apos; for live payments.</span>
+                  <code style={styles.envKey}>LEMON_SQUEEZY_STORE_ID</code>
+                  <span style={styles.envDesc}>Numeric Lemon Squeezy Store ID (from Dashboard → Stores).</span>
                 </div>
                 <div style={styles.envRow}>
-                  <code style={styles.envKey}>PADDLE_CLIENT_TOKEN</code>
-                  <span style={styles.envDesc}>Starts with &apos;test_&apos; in Sandbox, or &apos;live_&apos; in Production.</span>
+                  <code style={styles.envKey}>LEMON_SQUEEZY_VARIANT_MONTHLY</code>
+                  <span style={styles.envDesc}>Variant ID for Monthly Pass ($1.49).</span>
                 </div>
                 <div style={styles.envRow}>
-                  <code style={styles.envKey}>PADDLE_WEBHOOK_SECRET</code>
-                  <span style={styles.envDesc}>Destination secret from Paddle Dashboard → Notifications.</span>
+                  <code style={styles.envKey}>LEMON_SQUEEZY_VARIANT_YEARLY</code>
+                  <span style={styles.envDesc}>Variant ID for 1 Year Pro ($9.49).</span>
                 </div>
                 <div style={styles.envRow}>
-                  <code style={styles.envKey}>PADDLE_PRICE_MONTHLY</code>
-                  <span style={styles.envDesc}>Paddle Price ID for 1 Month Pass ($1.49). Starts with pri_</span>
+                  <code style={styles.envKey}>LEMON_SQUEEZY_VARIANT_LIFETIME</code>
+                  <span style={styles.envDesc}>Variant ID for Lifetime VIP ($19.99).</span>
                 </div>
                 <div style={styles.envRow}>
-                  <code style={styles.envKey}>PADDLE_PRICE_YEARLY</code>
-                  <span style={styles.envDesc}>Paddle Price ID for 1 Year Pro ($9.49). Starts with pri_</span>
-                </div>
-                <div style={styles.envRow}>
-                  <code style={styles.envKey}>PADDLE_PRICE_LIFETIME</code>
-                  <span style={styles.envDesc}>Paddle Price ID for Lifetime VIP ($19.99). Starts with pri_</span>
+                  <code style={styles.envKey}>LEMON_SQUEEZY_WEBHOOK_SECRET</code>
+                  <span style={styles.envDesc}>Signing secret configured in Lemon Squeezy Dashboard → Settings → Webhooks.</span>
                 </div>
                 <div style={styles.envRow}>
                   <code style={styles.envKey}>SUPABASE_URL</code>
                   <span style={styles.envDesc}>Your Supabase Project URL (https://xyz.supabase.co).</span>
                 </div>
                 <div style={styles.envRow}>
-                  <code style={styles.envKey}>SUPABASE_SERVICE_ROLE_KEY</code>
+                  <code style={styles.envKey}>SUPABASE_SECRET_KEY</code>
                   <span style={styles.envDesc}>Secret service_role key with write permissions for licenses.</span>
+                </div>
+                <div style={styles.envRow}>
+                  <code style={styles.envKey}>APP_BASE_URL</code>
+                  <span style={styles.envDesc}>https://autoreels-license-server.vercel.app</span>
+                </div>
+                <div style={styles.envRow}>
+                  <code style={styles.envKey}>ADMIN_API_KEY</code>
+                  <span style={styles.envDesc}>Private secret password for Master Admin login.</span>
+                </div>
+                <div style={styles.envRow}>
+                  <code style={styles.envKey}>ADMIN_EMAILS</code>
+                  <span style={styles.envDesc}>Comma-separated list of authorized admin emails for Supabase login.</span>
                 </div>
               </div>
             </div>

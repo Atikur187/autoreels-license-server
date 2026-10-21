@@ -82,6 +82,7 @@ export async function POST(request) {
           valid: false,
           premium: false,
           reason: 'INVALID_LICENSE',
+          code: 'INVALID_LICENSE',
           message: 'This license key is invalid.'
         },
         404,
@@ -96,6 +97,7 @@ export async function POST(request) {
           valid: false,
           premium: false,
           reason: 'REVOKED_LICENSE',
+          code: 'LICENSE_REVOKED',
           message: 'This license has been revoked.'
         },
         403,
@@ -116,6 +118,7 @@ export async function POST(request) {
           valid: false,
           premium: false,
           reason: 'EXPIRED_LICENSE',
+          code: 'LICENSE_EXPIRED',
           message: 'This license has expired.'
         },
         403,
@@ -129,6 +132,7 @@ export async function POST(request) {
           valid: false,
           premium: false,
           reason: 'INVALID_LICENSE',
+          code: 'INVALID_LICENSE',
           message: 'License is not active.'
         },
         403,

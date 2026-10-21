@@ -16,6 +16,8 @@ export async function OPTIONS(request) {
 export async function GET(request) {
   try {
     const { searchParams } = new URL(request.url);
+    const orderId = searchParams.get('order_id') || searchParams.get('lemonsqueezy_order_id');
+    const claimToken = searchParams.get('claim_token') || searchParams.get('token');
     const transactionId = searchParams.get('transaction_id') || searchParams.get('txn_id') || searchParams.get('paddle_transaction_id');
     const licenseKey = searchParams.get('license_key') || searchParams.get('key');
     const email = searchParams.get('email');
@@ -23,13 +25,73 @@ export async function GET(request) {
     const db = getDb();
 
     // -------------------------------------------------------------------------
-    // 1. Query by Paddle Transaction ID (Used by checkout success page polling)
+    // 0. Query by Claim Token (Lemon Squeezy secure post-checkout claim)
     // -------------------------------------------------------------------------
-    if (transactionId) {
+    if (claimToken) {
+      let licenseId = null;
+      try {
+        const { data: checkouts } = await db
+          .from('pending_checkouts')
+          .select('*')
+          .eq('claim_token', claimToken.trim());
+        if (checkouts && checkouts.length > 0 && checkouts[0].license_id) {
+          licenseId = checkouts[0].license_id;
+        }
+      } catch {}
+
+      if (!licenseId) {
+        const { data: purchases } = await db.from('purchases').select('*');
+        const match = (purchases || []).find((p) => p.metadata?.claim_token === claimToken.trim());
+        if (match && match.license_id) {
+          licenseId = match.license_id;
+        }
+      }
+
+      if (!licenseId) {
+        return jsonResponse(
+          {
+            success: true,
+            ready: false,
+            message: 'Waiting for verified Lemon Squeezy payment webhook...'
+          },
+          200,
+          request
+        );
+      }
+
+      const { data: licenses } = await db.from('licenses').select('*').eq('id', licenseId);
+      if (licenses && licenses.length > 0) {
+        const lic = licenses[0];
+        const isExpired = lic.expires_at && new Date(lic.expires_at) < new Date();
+        return jsonResponse(
+          {
+            success: true,
+            ready: true,
+            license_key: lic.license_key,
+            plan: lic.plan,
+            license: {
+              license_key: lic.license_key,
+              plan: lic.plan,
+              status: lic.status === 'revoked' ? 'revoked' : (isExpired ? 'expired' : lic.status),
+              expires_at: lic.expires_at,
+              max_devices: lic.max_devices
+            }
+          },
+          200,
+          request
+        );
+      }
+    }
+
+    // -------------------------------------------------------------------------
+    // 1. Query by Lemon Squeezy Order ID or Paddle Transaction ID
+    // -------------------------------------------------------------------------
+    const lookupId = (orderId || transactionId || '').trim();
+    if (lookupId) {
       const { data: purchases, error: purErr } = await db
         .from('purchases')
         .select('*')
-        .eq('paddle_transaction_id', transactionId.trim());
+        .or(`lemonsqueezy_order_id.eq.${lookupId},paddle_transaction_id.eq.${lookupId},paddle_transaction_id.eq.ls_order_${lookupId}`);
 
       if (purErr) {
         return jsonResponse({ success: false, error: 'Database error.' }, 500, request);

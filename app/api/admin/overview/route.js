@@ -18,12 +18,12 @@ import { getDb, isLiveSupabase } from '../../../../lib/supabase.js';
 import { verifyAdminRequest } from '../../../../lib/admin-auth.js';
 import { handleOptions, jsonResponse } from '../../../../lib/cors.js';
 import {
-  PADDLE_ENVIRONMENT,
-  PADDLE_CLIENT_TOKEN,
-  PADDLE_PRICE_MONTHLY,
-  PADDLE_PRICE_YEARLY,
-  PADDLE_PRICE_LIFETIME
-} from '../../../../lib/paddle.js';
+  LEMON_SQUEEZY_MODE,
+  LEMON_SQUEEZY_STORE_ID,
+  LEMON_SQUEEZY_API_KEY,
+  LEMON_SQUEEZY_WEBHOOK_SECRET,
+  getLemonSqueezyVariantId
+} from '../../../../lib/lemonsqueezy.js';
 
 export async function OPTIONS(request) {
   return handleOptions(request);
@@ -106,7 +106,7 @@ export async function GET(request) {
         const associatedLic = allLicenses.find((l) => l.id === p.license_id);
         return {
           id: p.id,
-          transactionId: p.paddle_transaction_id || 'N/A',
+          transactionId: p.lemonsqueezy_order_id ? `LS #${p.lemonsqueezy_order_id}` : (p.paddle_transaction_id || 'N/A'),
           customerEmail: p.customer_email || 'anonymous',
           plan: p.plan,
           amount: p.amount,
@@ -137,16 +137,15 @@ export async function GET(request) {
     // Diagnostic information
     const systemInfo = {
       isLiveSupabase: isLiveSupabase(),
-      paddleEnvironment: PADDLE_ENVIRONMENT,
-      clientTokenPrefix: (PADDLE_CLIENT_TOKEN || '').startsWith('live_')
-        ? 'live_'
-        : (PADDLE_CLIENT_TOKEN || '').startsWith('test_')
-        ? 'test_'
-        : 'none',
-      configuredPrices: {
-        monthly: Boolean(PADDLE_PRICE_MONTHLY && !PADDLE_PRICE_MONTHLY.includes('sample')),
-        yearly: Boolean(PADDLE_PRICE_YEARLY && !PADDLE_PRICE_YEARLY.includes('sample')),
-        lifetime: Boolean(PADDLE_PRICE_LIFETIME && !PADDLE_PRICE_LIFETIME.includes('sample'))
+      paymentProvider: 'lemonsqueezy',
+      lemonSqueezyMode: LEMON_SQUEEZY_MODE,
+      hasApiKey: Boolean(LEMON_SQUEEZY_API_KEY),
+      hasStoreId: Boolean(LEMON_SQUEEZY_STORE_ID),
+      hasWebhookSecret: Boolean(LEMON_SQUEEZY_WEBHOOK_SECRET),
+      configuredVariants: {
+        monthly: Boolean(getLemonSqueezyVariantId('30day')),
+        yearly: Boolean(getLemonSqueezyVariantId('yearly')),
+        lifetime: Boolean(getLemonSqueezyVariantId('lifetime'))
       }
     };
 

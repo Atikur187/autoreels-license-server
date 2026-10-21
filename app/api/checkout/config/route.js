@@ -1,23 +1,15 @@
 /**
- * AutoReels Scroll - Paddle Checkout Public Configuration API
+ * AutoReels Scroll — Lemon Squeezy Checkout Public Configuration API
  * Route: GET /api/checkout/config
  * 
- * Safely provides public client-side initialization parameters:
- * - environment ('sandbox' | 'production')
- * - public client token (never exposes secret keys)
- * - token status and prefix
- * - configured price IDs
- * - development diagnostic status
+ * Safely provides public payment configuration details (provider, mode, store status).
+ * NEVER exposes server-side secrets or API keys.
  */
 
 import {
-  PADDLE_ENVIRONMENT,
-  PADDLE_CLIENT_TOKEN,
-  PADDLE_PRICE_MONTHLY,
-  PADDLE_PRICE_YEARLY,
-  PADDLE_PRICE_LIFETIME,
-  IS_PRODUCTION
-} from '../../../../lib/paddle.js';
+  validateLemonSqueezyConfig,
+  getVariantIdForPlan
+} from '../../../../lib/lemonsqueezy.js';
 import { handleOptions, jsonResponse } from '../../../../lib/cors.js';
 
 export async function OPTIONS(request) {
@@ -26,57 +18,34 @@ export async function OPTIONS(request) {
 
 export async function GET(request) {
   try {
-    const rawToken = PADDLE_CLIENT_TOKEN || '';
-    const hasToken = Boolean(rawToken);
-    const isSampleToken = rawToken.includes('sample') || rawToken === 'test_sample_client_token';
+    const validation = validateLemonSqueezyConfig();
+    const mode = (process.env.LEMON_SQUEEZY_MODE || 'test').toLowerCase().trim();
+    const isTestMode = mode === 'test';
+    const isLiveMode = mode === 'live' || mode === 'production';
+    const storeId = (process.env.LEMON_SQUEEZY_STORE_ID || '').trim();
 
-    let tokenPrefix = 'none';
-    if (rawToken.startsWith('test_')) tokenPrefix = 'test_';
-    else if (rawToken.startsWith('live_')) tokenPrefix = 'live_';
-    else if (hasToken) tokenPrefix = 'unknown';
-
-    // Masked token for safe client diagnostics: e.g. test_sam...1234
-    let maskedToken = '';
-    if (rawToken.length > 10) {
-      maskedToken = `${rawToken.substring(0, 8)}...${rawToken.substring(rawToken.length - 4)}`;
-    } else if (hasToken) {
-      maskedToken = `${rawToken.substring(0, 4)}...`;
-    }
-
-    const isMonthlySample = PADDLE_PRICE_MONTHLY.includes('sample');
-    const isYearlySample = PADDLE_PRICE_YEARLY.includes('sample');
-    const isLifetimeSample = PADDLE_PRICE_LIFETIME.includes('sample');
-    const isSampleConfig = isSampleToken || isMonthlySample || isYearlySample || isLifetimeSample;
+    const monthlyVariant = getVariantIdForPlan('30day');
+    const yearlyVariant = getVariantIdForPlan('yearly');
+    const lifetimeVariant = getVariantIdForPlan('lifetime');
 
     return jsonResponse(
       {
         success: true,
-        environment: PADDLE_ENVIRONMENT,
-        isProduction: IS_PRODUCTION,
-        clientToken: rawToken,
-        diagnostics: {
-          hasToken,
-          tokenPrefix,
-          maskedToken,
-          isSampleToken,
-          isSampleConfig,
-          prices: {
-            '30day': {
-              id: PADDLE_PRICE_MONTHLY,
-              isSample: isMonthlySample,
-              amount: '$1.49'
-            },
-            'yearly': {
-              id: PADDLE_PRICE_YEARLY,
-              isSample: isYearlySample,
-              amount: '$9.49'
-            },
-            'lifetime': {
-              id: PADDLE_PRICE_LIFETIME,
-              isSample: isLifetimeSample,
-              amount: '$19.99'
-            }
-          }
+        provider: 'lemonsqueezy',
+        mode,
+        isTestMode,
+        isLiveMode,
+        isConfigured: validation.valid,
+        storeIdConfigured: Boolean(storeId),
+        variantsConfigured: {
+          monthly: Boolean(monthlyVariant),
+          yearly: Boolean(yearlyVariant),
+          lifetime: Boolean(lifetimeVariant)
+        },
+        variants: {
+          '30day': monthlyVariant || null,
+          'yearly': yearlyVariant || null,
+          'lifetime': lifetimeVariant || null
         }
       },
       200,

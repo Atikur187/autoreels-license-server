@@ -58,7 +58,8 @@ export async function GET(request) {
       const lic = p.license_id ? licenseMap.get(p.license_id) : null;
       return {
         id: p.id,
-        transactionId: p.paddle_transaction_id || 'N/A',
+        transactionId: p.lemonsqueezy_order_id ? `LS #${p.lemonsqueezy_order_id}` : (p.paddle_transaction_id || 'N/A'),
+        orderId: p.lemonsqueezy_order_id || null,
         customerEmail: p.customer_email || 'anonymous',
         plan: p.plan,
         amount: parseFloat(p.amount) || 0.00,
