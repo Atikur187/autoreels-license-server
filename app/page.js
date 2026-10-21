@@ -197,11 +197,21 @@ export default function PricingLandingPage() {
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ plan: plan.id })
       });
-      const data = await res.json();
+      const data = await res.json().catch(() => ({}));
 
       if (!res.ok || !data.success || !data.checkoutUrl) {
-        setPricingNotice(data.error || 'Unable to initialize checkout. Please try again later.');
+        let errorMsg = data.error || 'Unable to initialize checkout. Please check server configuration.';
+        if (errorMsg.includes('not configured in server environment') || errorMsg.includes('Variant ID') || errorMsg.includes('LEMON_SQUEEZY')) {
+          errorMsg = `Lemon Squeezy credentials are not yet set in Vercel: Please add LEMON_SQUEEZY_STORE_ID and LEMON_SQUEEZY_VARIANT_* in your Vercel Environment Variables to activate real checkouts.`;
+        }
+        setPricingNotice(errorMsg);
         setOpeningPlanId(null);
+        setTimeout(() => {
+          const el = document.getElementById('checkout-notice-alert');
+          if (el) {
+            el.scrollIntoView({ behavior: 'smooth', block: 'center' });
+          }
+        }, 80);
         return;
       }
 
@@ -209,8 +219,14 @@ export default function PricingLandingPage() {
       window.location.href = data.checkoutUrl;
     } catch (err) {
       console.error('[Checkout Connection Error]:', err);
-      setPricingNotice('Connection error contacting checkout service. Please try again.');
+      setPricingNotice('Connection error contacting checkout service: ' + (err.message || 'Network error'));
       setOpeningPlanId(null);
+      setTimeout(() => {
+        const el = document.getElementById('checkout-notice-alert');
+        if (el) {
+          el.scrollIntoView({ behavior: 'smooth', block: 'center' });
+        }
+      }, 80);
     }
   };
 
@@ -706,6 +722,12 @@ export default function PricingLandingPage() {
                 >
                   {openingPlanId === p.id ? 'Connecting Lemon Squeezy...' : p.buttonText}
                 </button>
+
+                {pricingNotice && openingPlanId === null && (
+                  <div style={{ marginTop: '10px', fontSize: '11px', color: '#fca5a5', lineHeight: 1.4, textAlign: 'center', backgroundColor: 'rgba(239, 68, 68, 0.1)', padding: '8px 10px', borderRadius: '6px', border: '1px solid rgba(239, 68, 68, 0.25)' }}>
+                    ⚠️ {pricingNotice}
+                  </div>
+                )}
               </div>
             );
           })}
